@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+    overscroll-behavior-x: none;
+  }
+
+  body {
+    @apply bg-bode-ivory text-bode-charcoal font-sans antialiased selection:bg-bode-gold/30 selection:text-bode-forest;
+  }
+
+  #root {
+    overflow-x: hidden;
+    width: 100%;
+  }
+}
+
+/* Custom animations & print overrides */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  header, aside, .print\:hidden {
+    display: none !important;
+  }
+}
