@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { CustomerVisit, VisitServiceEntry } from '../types';
 import {
@@ -24,6 +24,8 @@ import { AddGuestForm } from '../components/AddGuestForm';
 interface AppointmentsPageProps {
   onNavigate: (tab: string, visitId?: string) => void;
   onOpenInvoiceModal: (visit: CustomerVisit) => void;
+  autoAssignVisitId?: string | null;
+  onClearAutoAssign?: () => void;
 }
 
 const START_HOUR = 9;
@@ -45,6 +47,8 @@ function formatHour12(hour: number): string {
 export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
   onNavigate,
   onOpenInvoiceModal,
+  autoAssignVisitId,
+  onClearAutoAssign,
 }) => {
   const {
     branchVisits,
@@ -58,8 +62,10 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
     completeCustomerVisit,
   } = useApp();
 
-  // Default to 2026-11-22 where seeded appointments live, or user can switch to today
-  const [selectedDate, setSelectedDate] = useState<string>('2026-11-22');
+  // Default to today; seeded demo data is on 2026-11-22 — user can navigate back
+  const [selectedDate, setSelectedDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -81,6 +87,24 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
   const [slotServiceId, setSlotServiceId] = useState<string>(branchServices[0]?.id || '');
   const [slotDurationIdx, setSlotDurationIdx] = useState<number>(0);
   const [showSlotNewGuest, setShowSlotNewGuest] = useState(false);
+
+  // Auto-open staff assignment modal when arriving from "Create Service" flow
+  useEffect(() => {
+    if (!autoAssignVisitId) return;
+    const targetVisit = branchVisits.find((v) => v.id === autoAssignVisitId);
+    if (!targetVisit) return;
+    // Switch the calendar to show the new appointment's date
+    if (targetVisit.appointmentDate) {
+      setSelectedDate(targetVisit.appointmentDate);
+    }
+    // Auto-open the quick-panel for staff assignment
+    const firstService = targetVisit.services[0];
+    if (firstService) {
+      setQuickPanelTarget({ visit: targetVisit, service: firstService });
+    }
+    if (onClearAutoAssign) onClearAutoAssign();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAssignVisitId]);
 
   const shiftDate = (days: number) => {
     const d = new Date(selectedDate);
@@ -367,6 +391,19 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
       {/* Resource Grid View (Mobile + Desktop) */}
       {viewMode === 'grid' ? (
         <div className="bg-white rounded-2xl border border-bode-border shadow-sm overflow-x-auto">
+          {activeStaffColumns.length === 0 ? (
+            <div className="p-10 text-center text-sm text-bode-muted space-y-2">
+              <p className="font-semibold text-bode-forest">No active staff found for this branch.</p>
+              <p className="text-xs">Go to Staff Management to add or activate therapists.</p>
+              <button
+                type="button"
+                onClick={() => onNavigate('staff')}
+                className="mt-2 px-4 py-2 rounded-xl bg-bode-forest text-white text-xs font-semibold"
+              >
+                Go to Staff
+              </button>
+            </div>
+          ) : (
           <div
             style={{
               minWidth: `${68 + Math.max(1, activeStaffColumns.length) * 130}px`,
@@ -519,6 +556,8 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
             </div>
           </div>
         </div>
+          )}
+        </div>
       ) : (
         /* List View */
         <div className="bg-white rounded-2xl border border-bode-border shadow-sm divide-y divide-bode-border">
@@ -610,42 +649,105 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
                 </p>
               </div>
 
-              {/* Therapist Assignment / Reassignment */}
+              {/* Therapist Assignment / Reassignment — card-based picker */}
               <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-bode-muted mb-1">
-                  Assigned Therapist
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-bode-muted mb-2">
+                  {quickPanelTarget.service.staffId ? 'Reassign Therapist' : 'Assign Therapist'}
                 </label>
-                <select
-                  value={quickPanelTarget.service.staffId || ''}
-                  onChange={(e) => {
-                    const newStaffId = e.target.value;
-                    if (!newStaffId) return;
-                    assignStaffToService(
-                      quickPanelTarget.visit.id,
-                      quickPanelTarget.service.id,
-                      newStaffId
-                    );
-                    const member = branchStaff.find((s) => s.id === newStaffId);
-                    setQuickPanelTarget({
-                      ...quickPanelTarget,
-                      service: {
-                        ...quickPanelTarget.service,
-                        staffId: member?.id,
-                        staffName: member?.name,
-                      },
-                    });
-                  }}
-                  className="w-full px-3 py-2 rounded-lg border border-bode-border bg-white text-xs font-medium text-bode-forest"
-                >
-                  <option value="">Unassigned</option>
+                {/* Available staff shown as tap-to-select cards */}
+                <div className="grid grid-cols-3 gap-2 mb-2">
                   {branchStaff
                     .filter((s) => s.isActive)
-                    .map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.availability.replace('_', ' ')})
-                      </option>
-                    ))}
-                </select>
+                    .map((s) => {
+                      const isSelected = quickPanelTarget.service.staffId === s.id;
+                      const isAvailable = s.availability === 'AVAILABLE';
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          disabled={!isAvailable && !isSelected}
+                          onClick={() => {
+                            if (!isAvailable && !isSelected) return;
+                            assignStaffToService(
+                              quickPanelTarget.visit.id,
+                              quickPanelTarget.service.id,
+                              s.id
+                            );
+                            setQuickPanelTarget({
+                              ...quickPanelTarget,
+                              service: {
+                                ...quickPanelTarget.service,
+                                staffId: s.id,
+                                staffName: s.name,
+                              },
+                            });
+                          }}
+                          className={`flex flex-col items-center gap-1 p-2 rounded-xl border text-center transition ${
+                            isSelected
+                              ? 'border-bode-forest bg-bode-forest/10 ring-2 ring-bode-forest'
+                              : isAvailable
+                              ? 'border-bode-border bg-white hover:bg-emerald-50 hover:border-emerald-300 cursor-pointer'
+                              : 'border-bode-border/40 bg-gray-50 opacity-50 cursor-not-allowed'
+                          }`}
+                        >
+                          {/* Avatar */}
+                          <div
+                            className={`w-9 h-9 rounded-full font-bold text-xs flex items-center justify-center shrink-0 ${
+                              isSelected
+                                ? 'bg-bode-forest text-bode-gold'
+                                : isAvailable
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-gray-200 text-gray-500'
+                            }`}
+                          >
+                            {s.name
+                              .split(' ')
+                              .map((n) => n[0])
+                              .join('')
+                              .slice(0, 2)}
+                          </div>
+                          <span className="text-[10px] font-semibold text-bode-forest leading-tight truncate max-w-full">
+                            {s.name.split(' ')[0]}
+                          </span>
+                          <span
+                            className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full leading-none ${
+                              isSelected
+                                ? 'bg-bode-forest text-white'
+                                : isAvailable
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-700'
+                            }`}
+                          >
+                            {isSelected ? 'Assigned' : isAvailable ? 'Available' : s.availability.replace('_', ' ')}
+                          </span>
+                        </button>
+                      );
+                    })}
+                </div>
+                {/* Fallback: unassign option */}
+                {quickPanelTarget.service.staffId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      assignStaffToService(
+                        quickPanelTarget.visit.id,
+                        quickPanelTarget.service.id,
+                        ''
+                      );
+                      setQuickPanelTarget({
+                        ...quickPanelTarget,
+                        service: {
+                          ...quickPanelTarget.service,
+                          staffId: undefined,
+                          staffName: undefined,
+                        },
+                      });
+                    }}
+                    className="text-[11px] text-red-500 hover:underline flex items-center gap-1 mt-1"
+                  >
+                    <X className="w-3 h-3" /> Remove assignment
+                  </button>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">

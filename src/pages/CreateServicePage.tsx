@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Building,
   UserCheck,
+  UserPlus,
 } from 'lucide-react';
 
 interface CreateServicePageProps {
@@ -858,6 +859,13 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             <p className="text-xs text-bode-muted mt-1">
               Visit Reference: <strong className="font-mono text-bode-forest">{createdVisit.visitReference}</strong>
             </p>
+            {/* Next-step hint */}
+            {!createdVisit.services[0]?.staffId && (
+              <p className="mt-2 text-xs text-amber-700 font-semibold flex items-center justify-center gap-1">
+                <UserPlus className="w-3.5 h-3.5" />
+                No therapist assigned yet — tap below to assign from the calendar
+              </p>
+            )}
           </div>
 
           <div className="p-4 rounded-xl bg-bode-ivory border border-bode-border text-xs text-left space-y-1.5">
@@ -881,6 +889,14 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
 
           {/* Quick Actions (Section 6 Requirement) */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            {/* PRIMARY: Go to Calendar & assign staff — the main CTA after creation */}
+            <button
+              onClick={() => onNavigate('appointments', createdVisit.id)}
+              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-bode-emerald hover:bg-bode-forest text-white text-sm font-bold shadow-lg transition flex items-center justify-center gap-2"
+            >
+              <UserPlus className="w-4 h-4" />
+              Assign Staff on Calendar
+            </button>
             <button
               onClick={() => onNavigate('visit-detail', createdVisit.id)}
               className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-bode-forest hover:bg-bode-forestLight text-white text-xs font-semibold shadow transition"
@@ -892,12 +908,6 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
               className="w-full sm:w-auto px-6 py-2.5 rounded-xl border border-bode-border bg-bode-ivory hover:bg-bode-ivoryDark text-bode-charcoal text-xs font-semibold transition"
             >
               Create Another Service
-            </button>
-            <button
-              onClick={() => onNavigate('active-services')}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold shadow transition"
-            >
-              Go to Active Treatments
             </button>
           </div>
         </div>

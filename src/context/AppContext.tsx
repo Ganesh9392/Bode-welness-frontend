@@ -139,7 +139,7 @@ const STORAGE_KEYS = {
   AUTH_USER: 'bode_spa_auth_user_v1',
   VISITS: 'bode_spa_visits_v2',
   CUSTOMERS: 'bode_spa_customers_v2',
-  STAFF: 'bode_spa_staff_v2',
+  STAFF: 'bode_spa_staff_v3',
   NOTIFICATIONS: 'bode_spa_notifications_v2',
   POS_ORDERS: 'bode_spa_pos_orders_v1',
   STAFF_CATEGORIES: 'bode_spa_service_categories_v1',
@@ -181,7 +181,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [staff, setStaff] = useState<StaffMember[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.STAFF);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: StaffMember[] = JSON.parse(saved);
+        // Guard: if any staff member is missing branchId, the data is stale — reset
+        if (parsed.length > 0 && parsed.every((s) => s.branchId)) {
+          return parsed;
+        }
+      }
     } catch (e) {}
     return INITIAL_STAFF;
   });
