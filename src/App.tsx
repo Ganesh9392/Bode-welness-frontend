@@ -40,6 +40,7 @@ export const AppContent: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
+  const [autoAssignVisitId, setAutoAssignVisitId] = useState<string | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [showBranchSwitcher, setShowBranchSwitcher] = useState<boolean>(false);
 
@@ -74,6 +75,14 @@ export const AppContent: React.FC = () => {
     setActiveTab(tab);
     if (visitId) {
       setSelectedVisitId(visitId);
+      // When navigating to appointments with a visitId, treat it as "auto-assign" flow
+      if (tab === 'appointments') {
+        setAutoAssignVisitId(visitId);
+      } else {
+        setAutoAssignVisitId(null);
+      }
+    } else {
+      setAutoAssignVisitId(null);
     }
     setIsMobileSidebarOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -116,6 +125,8 @@ export const AppContent: React.FC = () => {
             <AppointmentsPage
               onNavigate={handleNavigate}
               onOpenInvoiceModal={(v) => setInvoiceVisit(v)}
+              autoAssignVisitId={autoAssignVisitId}
+              onClearAutoAssign={() => setAutoAssignVisitId(null)}
             />
           )}
 
