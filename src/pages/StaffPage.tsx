@@ -622,7 +622,46 @@ export const StaffPage: React.FC = () => {
                   {openSection === 5 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </button>
                 {openSection === 5 && (
-                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="p-4 space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingStaff({
+                            ...editingStaff,
+                            shifts: DAYS_OF_WEEK.map((day) => ({
+                              day,
+                              isOff: false,
+                              startTime: '09:00',
+                              endTime: '21:00',
+                            })),
+                          })
+                        }
+                        className="flex-1 py-2 px-3 rounded-lg border border-bode-emerald text-bode-emerald hover:bg-bode-emerald/5 font-semibold text-xs flex items-center justify-center gap-1.5"
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        Assign Shifts (All Days)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingStaff({
+                            ...editingStaff,
+                            shifts: DAYS_OF_WEEK.map((day) => ({
+                              day,
+                              isOff: day === 'Sunday',
+                              startTime: day === 'Sunday' ? undefined : '10:00',
+                              endTime: day === 'Sunday' ? undefined : '19:00',
+                            })),
+                          })
+                        }
+                        className="flex-1 py-2 px-3 rounded-lg border border-bode-border text-bode-charcoal hover:bg-bode-ivory font-semibold text-xs flex items-center justify-center gap-1.5"
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
+                        Weekly Off (Sun)
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {(editingStaff.shifts || DEFAULT_SHIFTS).map((shift) => (
                       <div
                         key={shift.day}
@@ -675,6 +714,7 @@ export const StaffPage: React.FC = () => {
                         )}
                       </div>
                     ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -774,4 +814,22 @@ export const StaffPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setEditingStaff(null)}
-        
+                  className="px-4 py-2.5 rounded-xl border border-bode-border font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-xl bg-bode-forest hover:bg-bode-forestLight text-white font-semibold flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4 text-bode-gold" />
+                  Save Staff
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
