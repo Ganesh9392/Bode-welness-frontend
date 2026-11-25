@@ -555,7 +555,6 @@ export const AppointmentsPage: React.FC<AppointmentsPageProps> = ({
               })}
             </div>
           </div>
-        </div>
           )}
         </div>
       ) : (
