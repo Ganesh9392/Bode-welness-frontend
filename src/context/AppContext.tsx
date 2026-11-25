@@ -77,15 +77,34 @@ interface AppContextType {
 
   createServiceVisit: (params: {
     customerId?: string;
-    customerData?: { name: string; mobileNumber: string; whatsAppNumber: string; email?: string };
+    customerData?: {
+      name: string;
+      mobileNumber: string;
+      whatsAppNumber: string;
+      email?: string;
+      gender?: 'Male' | 'Female' | 'Other';
+      dateOfBirth?: string;
+    };
     serviceId: string;
     durationMinutes: number;
     price: number;
     appointmentType: 'WALK_IN' | 'SCHEDULED';
     appointmentDate?: string;
     appointmentTime?: string;
+    appointmentTimeTo?: string;
     staffId?: string;
     notes?: string;
+    additionalServices?: Array<{
+      serviceId: string;
+      serviceName?: string;
+      category?: string;
+      durationMinutes: number;
+      price: number;
+      staffId?: string;
+      staffName?: string;
+      startTime?: string;
+      notes?: string;
+    }>;
   }) => CustomerVisit;
 
   checkInCustomer: (visitId: string) => void;
@@ -437,19 +456,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     appointmentType,
     appointmentDate,
     appointmentTime,
+    appointmentTimeTo,
     staffId,
     notes,
+    additionalServices,
   }: {
     customerId?: string;
-    customerData?: { name: string; mobileNumber: string; whatsAppNumber: string; email?: string };
+    customerData?: {
+      name: string;
+      mobileNumber: string;
+      whatsAppNumber: string;
+      email?: string;
+      gender?: 'Male' | 'Female' | 'Other';
+      dateOfBirth?: string;
+    };
     serviceId: string;
     durationMinutes: number;
     price: number;
     appointmentType: 'WALK_IN' | 'SCHEDULED';
     appointmentDate?: string;
     appointmentTime?: string;
+    appointmentTimeTo?: string;
     staffId?: string;
     notes?: string;
+    additionalServices?: Array<{
+      serviceId: string;
+      serviceName?: string;
+      category?: string;
+      durationMinutes: number;
+      price: number;
+      staffId?: string;
+      staffName?: string;
+      startTime?: string;
+      notes?: string;
+    }>;
   }): CustomerVisit => {
     if (!currentBranch || !currentManager) throw new Error('Manager or branch not found');
 
@@ -464,6 +504,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         mobileNumber: customerData.mobileNumber,
         whatsAppNumber: customerData.whatsAppNumber,
         email: customerData.email,
+        gender: customerData.gender,
+        dateOfBirth: customerData.dateOfBirth,
       });
     } else {
       throw new Error('Customer details required');
@@ -480,7 +522,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const isWalkIn = appointmentType === 'WALK_IN';
     const finalDate = isWalkIn ? currentDateStr : (appointmentDate || currentDateStr);
-    const finalTime = isWalkIn ? currentTimeStr : (appointmentTime || currentTimeStr);
+    const finalTime = isWalkIn ? (appointmentTime || currentTimeStr) : (appointmentTime || currentTimeStr);
+    const finalTimeTo = appointmentTimeTo;
 
     const branchPrefix = currentBranch.id === 'branch-ecil' ? 'ECIL' : 'NAG';
     const randNum = Math.floor(1000 + Math.random() * 9000);
@@ -497,10 +540,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: isWalkIn ? 'IN_PROGRESS' : 'ADDED',
       staffId: staffMember?.id,
       staffName: staffMember?.name,
-      startTime: isWalkIn ? currentTimeStr : undefined,
+      startTime: isWalkIn ? finalTime : undefined,
       isAdditionalService: false,
       notes: notes,
     };
+
+    const additionalEntries: VisitServiceEntry[] = (additionalServices || []).map((extra, idx) => {
+      const extraService = services.find((s) => s.id === extra.serviceId);
+      const extraStaff = extra.staffId ? staff.find((s) => s.id === extra.staffId) : undefined;
+      return {
+        id: `vs-add-${Date.now().toString(36)}-${idx}`,
+        serviceId: extra.serviceId,
+        serviceName: extra.serviceName || extraService?.name || 'Additional Service',
+        category: extra.category || extraService?.category || 'Treatment',
+        durationMinutes: extra.durationMinutes,
+        originalPrice: extra.price,
+        finalPrice: extra.price,
+        status: isWalkIn ? 'IN_PROGRESS' : 'ADDED',
+        staffId: extraStaff?.id,
+        staffName: extraStaff?.name,
+        startTime: extra.startTime || (isWalkIn ? finalTime : undefined),
+        isAdditionalService: true,
+        notes: extra.notes,
+      };
+    });
 
     const newVisit: CustomerVisit = {
       id: `vis-${Date.now().toString(36)}`,
@@ -511,13 +574,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerMobile: targetCustomer.mobileNumber,
       customerWhatsApp: targetCustomer.whatsAppNumber,
       customerEmail: targetCustomer.email,
+      customerGender: targetCustomer.gender,
+      customerDob: targetCustomer.dateOfBirth,
       source: 'MANAGER',
       visitStatus: isWalkIn ? 'IN_PROGRESS' : 'SCHEDULED',
       appointmentDate: finalDate,
       appointmentTime: finalTime,
+      appointmentTimeTo: finalTimeTo,
       onlineAdvancePaid: 0, // Walk-ins and manager-created appointments do not have ₹99 online fee
       isOnlineAdvanceCredited: false,
-      services: [initialServiceEntry],
+      services: [initialServiceEntry, ...additionalEntries],
       payments: [],
       paymentStatus: 'UNPAID',
       createdAt: `${currentDateStr} ${currentTimeStr}`,

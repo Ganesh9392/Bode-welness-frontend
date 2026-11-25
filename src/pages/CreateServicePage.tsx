@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../context/AppContext';
 import { Customer, CustomerVisit, ServiceItem } from '../types';
 import {
@@ -19,7 +20,100 @@ import {
   Building,
   UserCheck,
   UserPlus,
+  X,
+  ChevronDown,
+  Trash2,
 } from 'lucide-react';
+
+// ─── Time Slot Helpers ────────────────────────────────────────────────────────
+const ALL_TIME_SLOTS_24: string[] = [
+  '09:00', '09:15', '09:30', '09:45',
+  '10:00', '10:15', '10:30', '10:45',
+  '11:00', '11:15', '11:30', '11:45',
+  '12:00', '12:15', '12:30', '12:45',
+  '13:00', '13:15', '13:30', '13:45',
+  '14:00', '14:15', '14:30', '14:45',
+  '15:00', '15:15', '15:30', '15:45',
+  '16:00', '16:15', '16:30', '16:45',
+  '17:00', '17:15', '17:30', '17:45',
+  '18:00', '18:15', '18:30', '18:45',
+  '19:00', '19:15', '19:30', '19:45',
+  '20:00', '20:15', '20:30', '20:45',
+  '21:00', '21:15', '21:30', '21:45',
+  '22:00', '22:15', '22:30',
+];
+
+const formatTime12 = (time24: string): string => {
+  if (!time24) return '';
+  const [hStr, mStr] = time24.split(':');
+  let h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return time24;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+};
+
+const parseTimeToMinutes = (time24: string): number => {
+  if (!time24) return 0;
+  const [h, m] = time24.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+
+const minutesToTime24 = (totalMinutes: number): string => {
+  const h = Math.floor(totalMinutes / 60) % 24;
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+const addMinutesToTime = (time24: string, minutesToAdd: number): string => {
+  const total = parseTimeToMinutes(time24) + minutesToAdd;
+  return minutesToTime24(total);
+};
+
+const getCurrentTimeSlot24 = (): string => {
+  const now = new Date();
+  let h = now.getHours();
+  let m = now.getMinutes();
+
+  // If outside operating hours (before 09:00 or after 21:00), default to morning opening 10:00 AM
+  if (h < 9 || h >= 21) {
+    return '10:00';
+  }
+
+  const rem = m % 15;
+  if (rem !== 0) {
+    m += 15 - rem;
+    if (m >= 60) {
+      m = 0;
+      h += 1;
+    }
+  }
+
+  // If rounded slot exceeds operating hours, default to 10:00 AM
+  if (h >= 21) {
+    return '10:00';
+  }
+
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+interface AdditionalServiceItem {
+  id: string;
+  serviceId: string;
+  serviceName: string;
+  category: string;
+  durationMinutes: number;
+  price: number;
+  staffId?: string;
+  staffName?: string;
+  timeFrom?: string;
+  timeTo?: string;
+  notes?: string;
+}
+
+type ActiveSlotPicker = 'from' | 'to' | 'addModalFrom' | 'addModalTo' | null;
 
 interface CreateServicePageProps {
   onNavigate: (tab: string, visitId?: string) => void;
@@ -33,6 +127,7 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
     branchCustomers,
     findCustomerByPhone,
     createServiceVisit,
+    updateCustomer,
   } = useApp();
 
   // Wizard Step: 1, 2, 3, 4, 5 (Success)
@@ -46,6 +141,8 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
   const [customerWhatsApp, setCustomerWhatsApp] = useState<string>('');
   const [sameAsMobile, setSameAsMobile] = useState<boolean>(true);
   const [customerEmail, setCustomerEmail] = useState<string>('');
+  const [customerGender, setCustomerGender] = useState<'Male' | 'Female' | ''>('');
+  const [customerDob, setCustomerDob] = useState<string>('');
   const [step1Error, setStep1Error] = useState<string | null>(null);
 
   // Step 2: Service Selection State
@@ -58,10 +155,24 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
   const [appointmentDate, setAppointmentDate] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
-  const [appointmentTime, setAppointmentTime] = useState<string>('18:00');
+  const [appointmentTime, setAppointmentTime] = useState<string>(() => getCurrentTimeSlot24());
+  const [appointmentTimeTo, setAppointmentTimeTo] = useState<string>(() =>
+    addMinutesToTime(getCurrentTimeSlot24(), 60)
+  );
+  const [activeSlotPicker, setActiveSlotPicker] = useState<ActiveSlotPicker>(null);
   const [assignedStaffId, setAssignedStaffId] = useState<string>('');
   const [treatmentNotes, setTreatmentNotes] = useState<string>('');
   const [step3Error, setStep3Error] = useState<string | null>(null);
+
+  // Step 4: Multi-Service State (Add More Services)
+  const [additionalServices, setAdditionalServices] = useState<AdditionalServiceItem[]>([]);
+  const [showAddMoreModal, setShowAddMoreModal] = useState<boolean>(false);
+  const [addModalServiceId, setAddModalServiceId] = useState<string>('');
+  const [addModalDurationIdx, setAddModalDurationIdx] = useState<number>(0);
+  const [addModalStaffId, setAddModalStaffId] = useState<string>('');
+  const [addModalTimeFrom, setAddModalTimeFrom] = useState<string>('');
+  const [addModalTimeTo, setAddModalTimeTo] = useState<string>('');
+  const [addModalNotes, setAddModalNotes] = useState<string>('');
 
   // Success Created Visit
   const [createdVisit, setCreatedVisit] = useState<CustomerVisit | null>(null);
@@ -76,11 +187,15 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
       setCustomerMobile(found.mobileNumber);
       setCustomerWhatsApp(found.whatsAppNumber);
       setCustomerEmail(found.email || '');
+      setCustomerGender((found.gender as 'Male' | 'Female') || '');
+      setCustomerDob(found.dateOfBirth || '');
       setStep1Error(null);
     } else {
       setExistingCustomer(null);
       setCustomerMobile(mobileSearch);
       setCustomerWhatsApp(mobileSearch);
+      setCustomerGender('');
+      setCustomerDob('');
       setStep1Error('No existing customer found with this mobile. Please fill in details for a new guest.');
     }
   };
@@ -114,6 +229,26 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
   const selectedService = branchServices.find((s) => s.id === selectedServiceId) || branchServices[0];
   const selectedDurationOption = selectedService?.durations[selectedDurationIndex] || selectedService?.durations[0];
 
+  // Synchronize appointmentTimeTo whenever duration changes
+  useEffect(() => {
+    if (selectedDurationOption && appointmentTime) {
+      setAppointmentTimeTo(
+        addMinutesToTime(appointmentTime, selectedDurationOption.durationMinutes)
+      );
+    }
+  }, [selectedServiceId, selectedDurationIndex]);
+
+  // Prevent background scroll and sidebar jump when modals are open
+  useEffect(() => {
+    if (activeSlotPicker || showAddMoreModal) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [activeSlotPicker, showAddMoreModal]);
+
   // Categories
   const categories = ['ALL', ...Array.from(new Set(branchServices.map((s) => s.category)))];
   const filteredServices =
@@ -121,15 +256,137 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
       ? branchServices
       : branchServices.filter((s) => s.category === selectedCategory);
 
-  // Step 3 validation (prevent staff conflict)
+  // Filter available slots for the bottom sheet picker
+  const displayedSlots = React.useMemo(() => {
+    if (activeSlotPicker === 'to') {
+      const fromMinutes = parseTimeToMinutes(appointmentTime);
+      const filtered = ALL_TIME_SLOTS_24.filter((slot) => parseTimeToMinutes(slot) > fromMinutes);
+      if (filtered.length === 0) {
+        return [
+          addMinutesToTime(appointmentTime, 15),
+          addMinutesToTime(appointmentTime, 30),
+          addMinutesToTime(appointmentTime, 45),
+          addMinutesToTime(appointmentTime, 60),
+        ];
+      }
+      return filtered;
+    }
+    if (activeSlotPicker === 'addModalTo') {
+      const fromMinutes = parseTimeToMinutes(addModalTimeFrom);
+      const filtered = ALL_TIME_SLOTS_24.filter((slot) => parseTimeToMinutes(slot) > fromMinutes);
+      if (filtered.length === 0) {
+        return [
+          addMinutesToTime(addModalTimeFrom, 30),
+          addMinutesToTime(addModalTimeFrom, 60),
+          addMinutesToTime(addModalTimeFrom, 90),
+        ];
+      }
+      return filtered;
+    }
+    return ALL_TIME_SLOTS_24;
+  }, [activeSlotPicker, appointmentTime, addModalTimeFrom]);
+
+  // Step 4 Helper Functions: Multi-Service Management
+  const openAddMoreModal = () => {
+    const defaultSvc = branchServices[0];
+    const defaultSvcId = defaultSvc?.id || '';
+    const defaultDur = defaultSvc?.durations[0]?.durationMinutes || 45;
+
+    // Consecutive scheduling: follow after the last service end time
+    let lastEndTime = appointmentTimeTo || appointmentTime;
+    if (additionalServices.length > 0) {
+      const lastItem = additionalServices[additionalServices.length - 1];
+      if (lastItem.timeTo) {
+        lastEndTime = lastItem.timeTo;
+      }
+    }
+    const defaultFrom = lastEndTime || getCurrentTimeSlot24();
+    const defaultTo = addMinutesToTime(defaultFrom, defaultDur);
+
+    setAddModalServiceId(defaultSvcId);
+    setAddModalDurationIdx(0);
+    setAddModalStaffId(assignedStaffId || '');
+    setAddModalTimeFrom(defaultFrom);
+    setAddModalTimeTo(defaultTo);
+    setAddModalNotes('');
+    setShowAddMoreModal(true);
+  };
+
+  const handleAddModalServiceChange = (svcId: string) => {
+    setAddModalServiceId(svcId);
+    setAddModalDurationIdx(0);
+    const svc = branchServices.find((s) => s.id === svcId);
+    const dur = svc?.durations[0]?.durationMinutes || 45;
+    if (addModalTimeFrom) {
+      setAddModalTimeTo(addMinutesToTime(addModalTimeFrom, dur));
+    }
+  };
+
+  const handleAddModalDurationChange = (idx: number) => {
+    setAddModalDurationIdx(idx);
+    const svc = branchServices.find((s) => s.id === addModalServiceId);
+    const dur = svc?.durations[idx]?.durationMinutes || 45;
+    if (addModalTimeFrom) {
+      setAddModalTimeTo(addMinutesToTime(addModalTimeFrom, dur));
+    }
+  };
+
+  const handleConfirmAddMoreService = () => {
+    const svc = branchServices.find((s) => s.id === addModalServiceId);
+    if (!svc) return;
+    const durOpt = svc.durations[addModalDurationIdx] || svc.durations[0];
+    if (!durOpt) return;
+
+    const staffMember = addModalStaffId ? branchStaff.find((s) => s.id === addModalStaffId) : undefined;
+
+    const newItem: AdditionalServiceItem = {
+      id: `add-svc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      serviceId: svc.id,
+      serviceName: svc.name,
+      category: svc.category,
+      durationMinutes: durOpt.durationMinutes,
+      price: durOpt.price,
+      staffId: staffMember?.id,
+      staffName: staffMember?.name,
+      timeFrom: addModalTimeFrom,
+      timeTo: addModalTimeTo,
+      notes: addModalNotes.trim() || undefined,
+    };
+
+    setAdditionalServices((prev) => [...prev, newItem]);
+    setShowAddMoreModal(false);
+  };
+
+  const handleRemoveAdditionalService = (id: string) => {
+    setAdditionalServices((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  // Aggregated Bill & Duration Totals
+  const primaryPrice = selectedDurationOption?.price || 0;
+  const additionalPrice = additionalServices.reduce((sum, s) => sum + s.price, 0);
+  const totalPrice = primaryPrice + additionalPrice;
+
+  const primaryDuration = selectedDurationOption?.durationMinutes || 0;
+  const additionalDuration = additionalServices.reduce((sum, s) => sum + s.durationMinutes, 0);
+  const totalDuration = primaryDuration + additionalDuration;
+
+  // Step 3 validation (prevent staff conflict and validate time slot)
   const validateStep3 = () => {
     setStep3Error(null);
     if (appointmentType === 'SCHEDULED' && !appointmentDate) {
       setStep3Error('Please pick an appointment date.');
       return false;
     }
-    if (appointmentType === 'SCHEDULED' && !appointmentTime) {
-      setStep3Error('Please pick an appointment time.');
+    if (!appointmentTime) {
+      setStep3Error('Please pick a start time (From).');
+      return false;
+    }
+    if (!appointmentTimeTo) {
+      setStep3Error('Please pick an end time (To).');
+      return false;
+    }
+    if (parseTimeToMinutes(appointmentTimeTo) <= parseTimeToMinutes(appointmentTime)) {
+      setStep3Error('End time (To) must be after start time (From).');
       return false;
     }
     // Check if therapist is already IN_SERVICE for Walk-in
@@ -148,6 +405,13 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
     if (!selectedService || !selectedDurationOption) return;
 
     try {
+      if (existingCustomer && (customerGender || customerDob)) {
+        updateCustomer(existingCustomer.id, {
+          ...(customerGender ? { gender: customerGender } : {}),
+          ...(customerDob ? { dateOfBirth: customerDob } : {}),
+        });
+      }
+
       const newVisit = createServiceVisit({
         customerId: existingCustomer?.id,
         customerData: !existingCustomer
@@ -156,6 +420,8 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
               mobileNumber: customerMobile.trim(),
               whatsAppNumber: customerWhatsApp.trim(),
               email: customerEmail.trim() || undefined,
+              gender: customerGender || undefined,
+              dateOfBirth: customerDob || undefined,
             }
           : undefined,
         serviceId: selectedService.id,
@@ -163,9 +429,21 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
         price: selectedDurationOption.price,
         appointmentType,
         appointmentDate: appointmentType === 'SCHEDULED' ? appointmentDate : undefined,
-        appointmentTime: appointmentType === 'SCHEDULED' ? appointmentTime : undefined,
+        appointmentTime: appointmentTime,
+        appointmentTimeTo: appointmentTimeTo,
         staffId: assignedStaffId || undefined,
         notes: treatmentNotes.trim() || undefined,
+        additionalServices: additionalServices.map((extra) => ({
+          serviceId: extra.serviceId,
+          serviceName: extra.serviceName,
+          category: extra.category,
+          durationMinutes: extra.durationMinutes,
+          price: extra.price,
+          staffId: extra.staffId,
+          staffName: extra.staffName,
+          startTime: extra.timeFrom,
+          notes: extra.notes,
+        })),
       });
 
       setCreatedVisit(newVisit);
@@ -183,9 +461,16 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
     setCustomerMobile('');
     setCustomerWhatsApp('');
     setCustomerEmail('');
+    setCustomerGender('');
+    setCustomerDob('');
     setSelectedDurationIndex(0);
+    setAppointmentTime(getCurrentTimeSlot24());
+    setAppointmentTimeTo(addMinutesToTime(getCurrentTimeSlot24(), 60));
+    setActiveSlotPicker(null);
     setAssignedStaffId('');
     setTreatmentNotes('');
+    setAdditionalServices([]);
+    setShowAddMoreModal(false);
     setCreatedVisit(null);
   };
 
@@ -294,6 +579,8 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
                     setCustomerMobile(c.mobileNumber);
                     setCustomerWhatsApp(c.whatsAppNumber);
                     setCustomerEmail(c.email || '');
+                    setCustomerGender((c.gender as 'Male' | 'Female') || '');
+                    setCustomerDob(c.dateOfBirth || '');
                     setStep1Error(null);
                   }}
                   className="text-bode-emerald hover:underline font-semibold bg-white px-2 py-0.5 rounded border border-bode-border"
@@ -318,6 +605,8 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
               </div>
               <p className="text-[11px] text-emerald-800">
                 Last Visited: <strong>{existingCustomer.lastVisitDate || 'Recent'}</strong> • Service: <strong>{existingCustomer.lastService || 'Therapy'}</strong>
+                {existingCustomer.gender && <> • Gender: <strong>{existingCustomer.gender}</strong></>}
+                {existingCustomer.dateOfBirth && <> • DOB: <strong>{existingCustomer.dateOfBirth}</strong></>}
               </p>
               {existingCustomer.notes && (
                 <p className="text-[11px] text-emerald-700 italic">
@@ -402,6 +691,75 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
               </div>
             </div>
 
+            {/* Gender and Date of Birth (Responsive Grid) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Gender */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5">
+                  Gender
+                </label>
+                <div className="grid grid-cols-2 gap-2 h-[42px]">
+                  {(['Male', 'Female'] as const).map((g) => {
+                    const isSelected = customerGender === g;
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => setCustomerGender(customerGender === g ? '' : g)}
+                        className={`flex items-center justify-center gap-2 rounded-lg border text-xs font-semibold transition cursor-pointer select-none ${
+                          isSelected
+                            ? 'bg-bode-forest text-white border-bode-forest shadow-xs'
+                            : 'bg-bode-ivory/30 text-bode-charcoal border-bode-border hover:border-bode-forest/50 hover:bg-white'
+                        }`}
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full border transition-all ${
+                            isSelected
+                              ? 'bg-bode-gold border-bode-gold scale-110'
+                              : 'border-bode-muted/60 bg-white'
+                          }`}
+                        />
+                        <span>{g}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* DOB */}
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-bode-charcoal">
+                    Date of Birth (DOB)
+                  </label>
+                  {customerDob && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomerDob('')}
+                      className="text-[11px] text-bode-muted hover:text-red-600 transition"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="relative flex items-center">
+                  <Calendar className="w-4 h-4 text-bode-muted absolute left-3 top-3 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={customerDob}
+                    max={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => setCustomerDob(e.target.value)}
+                    onClick={(e) => {
+                      try {
+                        (e.target as HTMLInputElement).showPicker?.();
+                      } catch (_) {}
+                    }}
+                    className="w-full pl-9 pr-3 py-2.5 bg-bode-ivory/30 border border-bode-border rounded-lg text-sm text-bode-charcoal focus:ring-2 focus:ring-bode-forest focus:outline-none cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Email (Optional) */}
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5">
@@ -453,15 +811,15 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
           </div>
 
           {/* Category Pills */}
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
             {categories.map((cat) => (
               <button
                 key={cat}
                 type="button"
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition ${
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition shrink-0 ${
                   selectedCategory === cat
-                    ? 'bg-bode-forest text-white font-semibold'
+                    ? 'bg-bode-forest text-white font-semibold shadow-xs'
                     : 'bg-bode-ivory text-bode-charcoal hover:bg-bode-ivoryDark'
                 }`}
               >
@@ -470,8 +828,8 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             ))}
           </div>
 
-          {/* Service Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-h-96 overflow-y-auto p-1">
+          {/* Service Cards Grid (Responsive without descriptions) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5 max-h-[440px] overflow-y-auto p-1 scrollbar-none">
             {filteredServices.map((srv) => {
               const isSelected = selectedServiceId === srv.id;
               return (
@@ -481,36 +839,33 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
                     setSelectedServiceId(srv.id);
                     setSelectedDurationIndex(0);
                   }}
-                  className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                  className={`p-3.5 sm:p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
                     isSelected
                       ? 'border-bode-forest bg-bode-forest/5 ring-2 ring-bode-forest shadow-sm'
-                      : 'border-bode-border bg-white hover:bg-bode-ivory/40'
+                      : 'border-bode-border bg-white hover:bg-bode-ivory/40 hover:border-bode-forest/40'
                   }`}
                 >
                   <div>
-                    <div className="flex justify-between items-start">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-bode-emerald">
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-bode-emerald truncate">
                         {srv.category}
                       </span>
                       {isSelected && (
-                        <span className="w-5 h-5 rounded-full bg-bode-forest text-white text-[10px] flex items-center justify-center font-bold">
+                        <span className="w-5 h-5 rounded-full bg-bode-forest text-white text-[10px] flex items-center justify-center font-bold shrink-0">
                           ✓
                         </span>
                       )}
                     </div>
-                    <h3 className="font-serif font-bold text-base text-bode-forest mt-1">
+                    <h3 className="font-serif font-bold text-sm sm:text-base text-bode-forest mt-1 leading-snug">
                       {srv.name}
                     </h3>
-                    <p className="text-xs text-bode-muted mt-1 line-clamp-2 leading-relaxed">
-                      {srv.description}
-                    </p>
                   </div>
 
-                  <div className="mt-3 pt-3 border-t border-bode-border/60 flex items-center justify-between text-xs">
-                    <span className="text-bode-muted">
+                  <div className="mt-3 pt-2.5 border-t border-bode-border/60 flex items-center justify-between text-xs gap-2">
+                    <span className="text-bode-muted text-[11px] sm:text-xs">
                       Durations: {srv.durations.map((d) => `${d.durationMinutes}m`).join(' / ')}
                     </span>
-                    <span className="font-bold text-bode-forest text-sm">
+                    <span className="font-bold text-bode-forest text-xs sm:text-sm shrink-0">
                       From ₹{srv.durations[0].price.toLocaleString('en-IN')}
                     </span>
                   </div>
@@ -633,40 +988,139 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             </button>
           </div>
 
+          {/* Walk-in Time Slot (From & To) */}
+          {appointmentType === 'WALK_IN' && (
+            <div className="p-4 rounded-xl bg-bode-ivory/60 border border-bode-border space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-bode-forest flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-bode-emerald" />
+                  Service Time Slot
+                </span>
+                <span className="text-[11px] text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full font-bold">
+                  {selectedDurationOption?.durationMinutes || 60} Min Session
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                {/* From Field */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5 flex items-center gap-1">
+                    <span>From</span>
+                    <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSlotPicker('from')}
+                    className="w-full flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-bode-border hover:border-bode-forest rounded-xl text-left transition shadow-xs cursor-pointer group active:scale-[0.99]"
+                  >
+                    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                      <Clock className="w-4 h-4 text-bode-emerald shrink-0" />
+                      <span className="font-semibold text-bode-forest text-xs sm:text-sm truncate">
+                        {formatTime12(appointmentTime)}
+                      </span>
+                    </div>
+                    <ChevronDown className="w-4 h-4 text-bode-muted group-hover:text-bode-forest transition shrink-0 ml-1" />
+                  </button>
+                </div>
+
+                {/* To Field */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5 flex items-center gap-1">
+                    <span>To</span>
+                    <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSlotPicker('to')}
+                    className="w-full flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-bode-border hover:border-bode-forest rounded-xl text-left transition shadow-xs cursor-pointer group active:scale-[0.99]"
+                  >
+                    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                      <Clock className="w-4 h-4 text-bode-emerald shrink-0" />
+                      <span className="font-semibold text-bode-forest text-xs sm:text-sm truncate">
+                        {formatTime12(appointmentTimeTo)}
+                      </span>
+                    </div>
+                    <ChevronDown className="w-4 h-4 text-bode-muted group-hover:text-bode-forest transition shrink-0 ml-1" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Scheduled Date & Time Pickers */}
           {appointmentType === 'SCHEDULED' && (
             <div className="p-4 rounded-xl bg-bode-ivory border border-bode-border space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5">
-                    Appointment Date *
-                  </label>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5">
+                  Appointment Date *
+                </label>
+                <div className="relative">
+                  <Calendar className="w-4 h-4 text-bode-muted absolute left-3 top-3 pointer-events-none" />
                   <input
                     type="date"
                     min={new Date().toISOString().split('T')[0]}
                     value={appointmentDate}
                     onChange={(e) => setAppointmentDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-bode-border rounded-lg text-xs text-bode-charcoal focus:ring-2 focus:ring-bode-forest focus:outline-none"
+                    onClick={(e) => {
+                      try {
+                        (e.target as HTMLInputElement).showPicker?.();
+                      } catch (_) {}
+                    }}
+                    className="w-full pl-9 pr-3 py-2.5 bg-white border border-bode-border rounded-lg text-sm text-bode-charcoal focus:ring-2 focus:ring-bode-forest focus:outline-none cursor-pointer"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-bode-charcoal mb-1.5">
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-bode-charcoal">
                     Time Slot *
                   </label>
-                  <select
-                    value={appointmentTime}
-                    onChange={(e) => setAppointmentTime(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-bode-border rounded-lg text-xs text-bode-charcoal focus:ring-2 focus:ring-bode-forest focus:outline-none"
-                  >
-                    {[
-                      '10:00', '11:00', '12:00', '13:00', '14:00', '15:00',
-                      '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'
-                    ].map((t) => (
-                      <option key={t} value={t}>
-                        {t} hrs
-                      </option>
-                    ))}
-                  </select>
+                  <span className="text-[11px] text-bode-muted">
+                    Session: {selectedDurationOption?.durationMinutes || 60} mins
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                  {/* From Field */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-bode-muted mb-1 flex items-center gap-1">
+                      <span>From</span>
+                      <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSlotPicker('from')}
+                      className="w-full flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-bode-border hover:border-bode-forest rounded-xl text-left transition shadow-xs cursor-pointer group active:scale-[0.99]"
+                    >
+                      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                        <Clock className="w-4 h-4 text-bode-emerald shrink-0" />
+                        <span className="font-semibold text-bode-forest text-xs sm:text-sm truncate">
+                          {formatTime12(appointmentTime)}
+                        </span>
+                      </div>
+                      <ChevronDown className="w-4 h-4 text-bode-muted group-hover:text-bode-forest transition shrink-0 ml-1" />
+                    </button>
+                  </div>
+
+                  {/* To Field */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-bode-muted mb-1 flex items-center gap-1">
+                      <span>To</span>
+                      <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSlotPicker('to')}
+                      className="w-full flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-bode-border hover:border-bode-forest rounded-xl text-left transition shadow-xs cursor-pointer group active:scale-[0.99]"
+                    >
+                      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                        <Clock className="w-4 h-4 text-bode-emerald shrink-0" />
+                        <span className="font-semibold text-bode-forest text-xs sm:text-sm truncate">
+                          {formatTime12(appointmentTimeTo)}
+                        </span>
+                      </div>
+                      <ChevronDown className="w-4 h-4 text-bode-muted group-hover:text-bode-forest transition shrink-0 ml-1" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -761,6 +1215,13 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
                 </p>
                 <p className="text-bode-charcoal mt-0.5">Calling Phone: {customerMobile}</p>
                 <p className="text-bode-charcoal">WhatsApp: {customerWhatsApp}</p>
+                {(customerGender || customerDob) && (
+                  <p className="text-bode-charcoal">
+                    {customerGender && <span>Gender: <strong>{customerGender}</strong></span>}
+                    {customerGender && customerDob && <span> • </span>}
+                    {customerDob && <span>DOB: <strong>{customerDob}</strong></span>}
+                  </p>
+                )}
                 {customerEmail && <p className="text-bode-muted">{customerEmail}</p>}
               </div>
 
@@ -770,46 +1231,156 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
                 </span>
                 <p className="font-semibold text-bode-forest mt-0.5">{currentBranch?.name}</p>
                 <p className="text-bode-charcoal mt-0.5">
-                  Type: <strong>{appointmentType === 'WALK_IN' ? 'Walk-in / Start Now' : 'Scheduled Slot'}</strong>
+                  Type: <strong>{appointmentType === 'WALK_IN' ? 'Walk-in / Start Now' : 'Scheduled Appointment'}</strong>
                 </p>
-                {appointmentType === 'SCHEDULED' && (
-                  <p className="text-bode-charcoal">
-                    Date & Time: {appointmentDate} at {appointmentTime} hrs
-                  </p>
-                )}
+                <p className="text-bode-charcoal">
+                  {appointmentType === 'SCHEDULED' ? `Date: ${appointmentDate} • ` : 'Session: '}
+                  Time: <strong>{formatTime12(appointmentTime)} – {formatTime12(appointmentTimeTo)}</strong>
+                </p>
                 <p className="text-bode-muted">Source: Direct Manager Front Desk</p>
               </div>
             </div>
 
-            {/* Treatment Breakdown */}
-            <div className="py-2 space-y-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-bode-emerald">
-                Selected Treatment
-              </span>
-              <div className="p-3.5 rounded-xl bg-white border border-bode-border flex justify-between items-center">
+            {/* Treatment Breakdown & Multi-Service List */}
+            <div className="py-2 space-y-3">
+              <div className="flex items-center justify-between">
                 <div>
-                  <p className="font-bold text-bode-forest text-sm">{selectedService?.name}</p>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-bode-emerald">
+                    Services ({1 + additionalServices.length})
+                  </span>
                   <p className="text-[11px] text-bode-muted">
-                    {selectedService?.category} • {selectedDurationOption?.durationMinutes} mins
+                    Treatments included in this visit session
                   </p>
-                  {assignedStaffId && (
-                    <p className="text-[11px] text-bode-forest mt-0.5">
-                      Assigned Therapist: <strong>{branchStaff.find((s) => s.id === assignedStaffId)?.name}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={openAddMoreModal}
+                  className="px-3.5 py-1.5 rounded-full border border-bode-emerald text-bode-emerald hover:bg-bode-emerald hover:text-white transition text-xs font-bold flex items-center gap-1.5 active:scale-95 shadow-xs cursor-pointer min-h-[36px]"
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Add (+)</span>
+                </button>
+              </div>
+
+              {/* Service #1: Primary Treatment */}
+              <div className="p-3.5 rounded-xl bg-white border border-bode-border hover:border-bode-forest/40 transition shadow-2xs">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-bode-ivoryDark text-bode-forest border border-bode-border shrink-0">
+                        #1 Primary
+                      </span>
+                      <p className="font-bold text-bode-forest text-sm truncate">
+                        {selectedService?.name}
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-bode-muted mt-0.5">
+                      {selectedService?.category} • {selectedDurationOption?.durationMinutes} mins
                     </p>
-                  )}
-                  {treatmentNotes && (
-                    <p className="text-[11px] text-bode-charcoal mt-0.5 italic">
-                      Notes: {treatmentNotes}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-bode-charcoal">
+                      <span className="flex items-center gap-1 font-medium">
+                        <Clock className="w-3 h-3 text-bode-emerald shrink-0" />
+                        {formatTime12(appointmentTime)} – {formatTime12(appointmentTimeTo)}
+                      </span>
+                      {assignedStaffId ? (
+                        <span className="flex items-center gap-1 font-semibold text-bode-forest">
+                          <User className="w-3 h-3 text-bode-emerald shrink-0" />
+                          {branchStaff.find((s) => s.id === assignedStaffId)?.name}
+                        </span>
+                      ) : (
+                        <span className="text-bode-muted italic">Unassigned therapist</span>
+                      )}
+                    </div>
+                    {treatmentNotes && (
+                      <p className="text-[11px] text-bode-charcoal mt-1 italic">
+                        Notes: {treatmentNotes}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-serif text-base sm:text-lg font-bold text-bode-forest">
+                      ₹{selectedDurationOption?.price.toLocaleString('en-IN')}
                     </p>
-                  )}
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-bode-ivory text-bode-charcoal font-medium inline-block mt-0.5">
+                      Base Tariff
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Services */}
+              {additionalServices.map((extra, idx) => (
+                <div
+                  key={extra.id}
+                  className="p-3.5 rounded-xl bg-white border border-bode-border hover:border-bode-forest/40 transition shadow-2xs animate-fade-in"
+                >
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
+                          #{idx + 2} Add-on
+                        </span>
+                        <p className="font-bold text-bode-forest text-sm truncate">
+                          {extra.serviceName}
+                        </p>
+                      </div>
+                      <p className="text-[11px] text-bode-muted mt-0.5">
+                        {extra.category} • {extra.durationMinutes} mins
+                      </p>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-bode-charcoal">
+                        {extra.timeFrom && (
+                          <span className="flex items-center gap-1 font-medium">
+                            <Clock className="w-3 h-3 text-bode-emerald shrink-0" />
+                            {formatTime12(extra.timeFrom)} {extra.timeTo ? `– ${formatTime12(extra.timeTo)}` : ''}
+                          </span>
+                        )}
+                        {extra.staffName ? (
+                          <span className="flex items-center gap-1 font-semibold text-bode-forest">
+                            <User className="w-3 h-3 text-bode-emerald shrink-0" />
+                            {extra.staffName}
+                          </span>
+                        ) : (
+                          <span className="text-bode-muted italic">Unassigned therapist</span>
+                        )}
+                      </div>
+                      {extra.notes && (
+                        <p className="text-[11px] text-bode-charcoal mt-1 italic">
+                          Notes: {extra.notes}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <p className="font-serif text-base sm:text-lg font-bold text-bode-forest">
+                        ₹{extra.price.toLocaleString('en-IN')}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAdditionalService(extra.id)}
+                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition active:scale-90 cursor-pointer min-w-[32px] min-h-[32px] flex items-center justify-center"
+                        title="Remove add-on service"
+                        aria-label="Remove add-on service"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* Total Summary Banner (Like Reference Mockup) */}
+              <div className="p-3.5 rounded-xl bg-bode-forest text-white flex items-center justify-between shadow-sm">
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-bode-gold block">
+                    Total Estimated Bill
+                  </span>
+                  <p className="text-xs text-bode-ivory/80 mt-0.5">
+                    {1 + additionalServices.length} Treatment{additionalServices.length > 0 ? 's' : ''} • {totalDuration} Mins Combined
+                  </p>
                 </div>
                 <div className="text-right">
-                  <p className="font-serif text-lg font-bold text-bode-forest">
-                    ₹{selectedDurationOption?.price.toLocaleString('en-IN')}
+                  <p className="font-serif text-xl sm:text-2xl font-bold text-white">
+                    ₹{totalPrice.toLocaleString('en-IN')}
                   </p>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-bode-ivory font-medium">
-                    Initial Tariff
-                  </span>
                 </div>
               </div>
             </div>
@@ -821,11 +1392,11 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
           </div>
 
           {/* Primary Create Button (Section 6 Requirement) */}
-          <div className="flex justify-between items-center pt-4 border-t border-bode-border">
+          <div className="flex justify-between items-center pt-4 border-t border-bode-border gap-2">
             <button
               type="button"
               onClick={() => setCurrentStep(3)}
-              className="px-4 py-2 border border-bode-border hover:bg-bode-ivory text-bode-charcoal text-xs font-medium rounded-lg transition flex items-center gap-1.5"
+              className="px-4 py-2.5 border border-bode-border hover:bg-bode-ivory text-bode-charcoal text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer min-h-[44px]"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Back</span>
@@ -833,10 +1404,10 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             <button
               type="button"
               onClick={handleCreateService}
-              className="px-8 py-3 bg-bode-forest hover:bg-bode-forestLight text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-lg transition flex items-center gap-2"
+              className="px-6 sm:px-8 py-3 bg-bode-forest hover:bg-bode-forestLight text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-lg transition flex items-center gap-2 cursor-pointer active:scale-95 min-h-[44px]"
             >
               <Sparkles className="w-4 h-4 text-bode-gold" />
-              <span>CREATE SERVICE</span>
+              <span>CREATE SERVICE (₹{totalPrice.toLocaleString('en-IN')})</span>
             </button>
           </div>
         </div>
@@ -844,7 +1415,7 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
 
       {/* STEP 5: SUCCESS CONFIRMATION SCREEN (Section 6 Requirement) */}
       {currentStep === 5 && createdVisit && (
-        <div className="bg-white rounded-2xl border border-bode-border p-8 text-center space-y-6 shadow-sm animate-fade-in max-w-xl mx-auto">
+        <div className="bg-white rounded-2xl border border-bode-border p-6 sm:p-8 text-center space-y-6 shadow-sm animate-fade-in max-w-xl mx-auto">
           <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
             <CheckCircle2 className="w-8 h-8" />
           </div>
@@ -868,20 +1439,33 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             )}
           </div>
 
-          <div className="p-4 rounded-xl bg-bode-ivory border border-bode-border text-xs text-left space-y-1.5">
-            <div className="flex justify-between">
-              <span className="text-bode-muted">Initial Service:</span>
-              <span className="font-semibold text-bode-forest">{createdVisit.services[0]?.serviceName}</span>
+          <div className="p-4 rounded-xl bg-bode-ivory border border-bode-border text-xs text-left space-y-2">
+            <div className="flex justify-between items-center border-b border-bode-border/60 pb-1.5">
+              <span className="font-bold uppercase tracking-wider text-[10px] text-bode-emerald">
+                Services Booked ({createdVisit.services.length})
+              </span>
+              <span className="font-serif font-bold text-sm text-bode-forest">
+                Total ₹{createdVisit.services.reduce((acc, s) => acc + s.finalPrice, 0).toLocaleString('en-IN')}
+              </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-bode-muted">Duration & Price:</span>
-              <span>{createdVisit.services[0]?.durationMinutes} min • ₹{createdVisit.services[0]?.finalPrice}</span>
-            </div>
-            <div className="flex justify-between">
+            {createdVisit.services.map((svc, idx) => (
+              <div key={svc.id || idx} className="flex justify-between items-center py-1 border-b border-bode-border/30 last:border-b-0">
+                <div>
+                  <span className="font-semibold text-bode-forest">
+                    {idx === 0 ? '1. ' : `${idx + 1}. `}{svc.serviceName}
+                  </span>
+                  <p className="text-[10px] text-bode-muted">
+                    {svc.durationMinutes} min {svc.staffName ? `• ${svc.staffName}` : ''}
+                  </p>
+                </div>
+                <span className="font-semibold text-bode-charcoal">₹{svc.finalPrice.toLocaleString('en-IN')}</span>
+              </div>
+            ))}
+            <div className="flex justify-between pt-1 text-[11px]">
               <span className="text-bode-muted">Session Status:</span>
               <span className="font-bold text-emerald-700 uppercase">{createdVisit.visitStatus}</span>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between text-[11px]">
               <span className="text-bode-muted">Branch:</span>
               <span>{currentBranch?.name}</span>
             </div>
@@ -911,6 +1495,319 @@ export const CreateServicePage: React.FC<CreateServicePageProps> = ({ onNavigate
             </button>
           </div>
         </div>
+      )}
+
+      {/* Add Another Service Modal / Bottom Sheet (Mobile Handy & Desktop Centered) */}
+      {showAddMoreModal && typeof document !== 'undefined' && createPortal(
+        (() => {
+          const modalService = branchServices.find((s) => s.id === addModalServiceId) || branchServices[0];
+          const modalDurationOpt = modalService?.durations[addModalDurationIdx] || modalService?.durations[0];
+
+          return (
+            <div
+              className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-fade-in"
+              onClick={() => setShowAddMoreModal(false)}
+            >
+              <div
+                className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl border border-bode-border max-h-[90vh] sm:max-h-[85vh] flex flex-col overflow-hidden animate-slide-up"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Mobile Drag Indicator */}
+                <div className="w-12 h-1.5 bg-bode-border rounded-full mx-auto mt-3 mb-1 sm:hidden shrink-0" />
+
+                {/* Header */}
+                <div className="px-5 py-4 border-b border-bode-border flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-bode-forest text-white flex items-center justify-center shadow-xs shrink-0">
+                      <Plus className="w-5 h-5 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <h3 className="font-serif font-bold text-base sm:text-lg text-bode-forest leading-tight">
+                        Add Another Service
+                      </h3>
+                      <p className="text-[11px] text-bode-muted">
+                        Add an additional treatment to this guest session
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddMoreModal(false)}
+                    className="w-8 h-8 rounded-full bg-bode-ivory hover:bg-bode-ivoryDark text-bode-charcoal flex items-center justify-center transition cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Scrollable Body */}
+                <div className="p-4 sm:p-5 overflow-y-auto space-y-4 scrollbar-none">
+                  {/* 1. Select Treatment */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-bode-forest uppercase tracking-wider mb-1.5">
+                      Select Treatment <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={addModalServiceId}
+                        onChange={(e) => handleAddModalServiceChange(e.target.value)}
+                        className="w-full appearance-none px-3.5 py-2.5 pr-10 rounded-xl border border-bode-border bg-bode-ivory/50 text-bode-forest font-semibold text-xs focus:ring-2 focus:ring-bode-forest/20 focus:border-bode-forest outline-none transition cursor-pointer min-h-[42px]"
+                      >
+                        {branchServices.map((svc) => (
+                          <option key={svc.id} value={svc.id}>
+                            [{svc.category}] {svc.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="w-4 h-4 text-bode-muted pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
+                    </div>
+                  </div>
+
+                  {/* 2. Duration & Tariff */}
+                  {modalService && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-bode-forest uppercase tracking-wider mb-1.5">
+                        Select Duration &amp; Tariff <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {modalService.durations.map((opt, idx) => {
+                          const isSelected = addModalDurationIdx === idx;
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => handleAddModalDurationChange(idx)}
+                              className={`p-2.5 rounded-xl border text-center transition cursor-pointer active:scale-95 ${
+                                isSelected
+                                  ? 'bg-bode-forest text-white border-bode-forest shadow-sm ring-1 ring-bode-forest'
+                                  : 'bg-white border-bode-border text-bode-charcoal hover:border-bode-forest hover:bg-bode-ivory/40'
+                              }`}
+                            >
+                              <div className="font-bold text-xs">{opt.durationMinutes} Mins</div>
+                              <div
+                                className={`text-xs mt-0.5 font-semibold ${
+                                  isSelected ? 'text-bode-gold' : 'text-bode-forest'
+                                }`}
+                              >
+                                ₹{opt.price.toLocaleString('en-IN')}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Assign Therapist (Optional) */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-bode-forest uppercase tracking-wider mb-1.5">
+                      Assign Therapist (Optional)
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={addModalStaffId}
+                        onChange={(e) => setAddModalStaffId(e.target.value)}
+                        className="w-full appearance-none px-3.5 py-2.5 pr-10 rounded-xl border border-bode-border bg-bode-ivory/50 text-bode-forest text-xs focus:ring-2 focus:ring-bode-forest/20 focus:border-bode-forest outline-none transition cursor-pointer min-h-[42px]"
+                      >
+                        <option value="">-- Auto-Assign / Any Available Therapist --</option>
+                        {branchStaff.map((stf) => (
+                          <option key={stf.id} value={stf.id}>
+                            {stf.name} ({stf.role}) {stf.availability === 'AVAILABLE' ? '— Available' : `— [${stf.availability}]`}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="w-4 h-4 text-bode-muted pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
+                    </div>
+                  </div>
+
+                  {/* 4. Time Window (From & To) */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-[11px] font-bold text-bode-forest uppercase tracking-wider">
+                        Scheduled Time Window
+                      </label>
+                      <span className="text-[10px] text-bode-muted">Consecutive schedule</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <span className="block text-[10px] text-bode-muted font-medium mb-1">
+                          From (Start Time)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSlotPicker('addModalFrom')}
+                          className="w-full p-2.5 rounded-xl border border-bode-border bg-bode-ivory/40 hover:border-bode-forest hover:bg-bode-ivory text-left flex items-center justify-between transition cursor-pointer min-h-[42px]"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-bode-emerald shrink-0" />
+                            <span className="font-semibold text-xs text-bode-forest">
+                              {formatTime12(addModalTimeFrom) || 'Select Time'}
+                            </span>
+                          </div>
+                          <ChevronDown className="w-3.5 h-3.5 text-bode-muted" />
+                        </button>
+                      </div>
+
+                      <div>
+                        <span className="block text-[10px] text-bode-muted font-medium mb-1">
+                          To (End Time)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSlotPicker('addModalTo')}
+                          className="w-full p-2.5 rounded-xl border border-bode-border bg-bode-ivory/40 hover:border-bode-forest hover:bg-bode-ivory text-left flex items-center justify-between transition cursor-pointer min-h-[42px]"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-bode-emerald shrink-0" />
+                            <span className="font-semibold text-xs text-bode-forest">
+                              {formatTime12(addModalTimeTo) || 'Select Time'}
+                            </span>
+                          </div>
+                          <ChevronDown className="w-3.5 h-3.5 text-bode-muted" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5. Special Notes */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-bode-forest uppercase tracking-wider mb-1.5">
+                      Treatment Notes (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={addModalNotes}
+                      onChange={(e) => setAddModalNotes(e.target.value)}
+                      placeholder="e.g. Focus on shoulders, extra pressure"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-bode-border bg-white text-xs placeholder:text-bode-muted focus:ring-2 focus:ring-bode-forest/20 focus:border-bode-forest outline-none transition min-h-[42px]"
+                    />
+                  </div>
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-4 bg-bode-ivory/60 border-t border-bode-border flex items-center justify-between gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddMoreModal(false)}
+                    className="px-4 py-2.5 rounded-xl border border-bode-border text-xs font-semibold text-bode-charcoal hover:bg-bode-ivory transition cursor-pointer active:scale-95 min-h-[42px]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmAddMoreService}
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-bode-forest hover:bg-bode-forestLight text-white text-xs font-bold uppercase tracking-wider shadow-md transition flex items-center justify-center gap-2 cursor-pointer active:scale-95 min-h-[42px]"
+                  >
+                    <Plus className="w-4 h-4 text-bode-gold stroke-[2.5]" />
+                    <span>
+                      Add Treatment {modalDurationOpt ? `(₹${modalDurationOpt.price.toLocaleString('en-IN')})` : ''}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })(),
+        document.body
+      )}
+
+      {/* Time Slot Picker Modal / Bottom Sheet (Mobile Optimized & Desktop Centered) */}
+      {activeSlotPicker && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-fade-in"
+          onClick={() => setActiveSlotPicker(null)}
+        >
+          <div
+            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl border border-bode-border max-h-[85vh] sm:max-h-[80vh] flex flex-col overflow-hidden animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Mobile Drag Indicator */}
+            <div className="w-12 h-1.5 bg-bode-border rounded-full mx-auto mt-3 mb-1 sm:hidden shrink-0" />
+
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-bode-border flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-bode-forest">
+                  Select slot
+                </h3>
+                <p className="text-xs text-bode-muted mt-0.5">
+                  {activeSlotPicker === 'to'
+                    ? `Select time after ${formatTime12(appointmentTime)}`
+                    : activeSlotPicker === 'addModalTo'
+                    ? `Select time after ${formatTime12(addModalTimeFrom)}`
+                    : activeSlotPicker === 'addModalFrom'
+                    ? 'Select start time for add-on treatment'
+                    : `Select start time (${selectedDurationOption?.durationMinutes || 60}m session)`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSlotPicker(null)}
+                className="w-8 h-8 rounded-full bg-bode-ivory hover:bg-bode-ivoryDark text-bode-charcoal flex items-center justify-center transition cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Slots Grid */}
+            <div className="p-4 overflow-y-auto max-h-[60vh] scrollbar-none space-y-2">
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+                {displayedSlots.map((slot) => {
+                  const isCurrent =
+                    activeSlotPicker === 'from'
+                      ? appointmentTime === slot
+                      : activeSlotPicker === 'to'
+                      ? appointmentTimeTo === slot
+                      : activeSlotPicker === 'addModalFrom'
+                      ? addModalTimeFrom === slot
+                      : addModalTimeTo === slot;
+                  return (
+                    <button
+                      key={slot}
+                      type="button"
+                      onClick={() => {
+                        if (activeSlotPicker === 'from') {
+                          setAppointmentTime(slot);
+                          if (selectedDurationOption) {
+                            setAppointmentTimeTo(
+                              addMinutesToTime(slot, selectedDurationOption.durationMinutes)
+                            );
+                          }
+                        } else if (activeSlotPicker === 'to') {
+                          setAppointmentTimeTo(slot);
+                        } else if (activeSlotPicker === 'addModalFrom') {
+                          setAddModalTimeFrom(slot);
+                          const currentAddSvc = branchServices.find((s) => s.id === addModalServiceId);
+                          const dur = currentAddSvc?.durations[addModalDurationIdx]?.durationMinutes || 45;
+                          setAddModalTimeTo(addMinutesToTime(slot, dur));
+                        } else if (activeSlotPicker === 'addModalTo') {
+                          setAddModalTimeTo(slot);
+                        }
+                        setActiveSlotPicker(null);
+                      }}
+                      className={`py-3 px-3 rounded-xl border text-center text-xs sm:text-sm font-semibold transition active:scale-95 cursor-pointer ${
+                        isCurrent
+                          ? 'border-bode-forest bg-bode-forest text-white ring-2 ring-bode-forest shadow-sm'
+                          : 'border-bode-border bg-white text-bode-charcoal hover:border-bode-forest hover:bg-bode-ivory/40'
+                      }`}
+                    >
+                      {formatTime12(slot)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 bg-bode-ivory/50 border-t border-bode-border text-center">
+              <p className="text-[11px] text-bode-muted">
+                Operating hours & sessions: 09:00 AM – 10:30 PM (15-min intervals)
+              </p>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

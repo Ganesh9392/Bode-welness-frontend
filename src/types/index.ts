@@ -186,10 +186,13 @@ export interface CustomerVisit {
   customerMobile: string;
   customerWhatsApp: string;
   customerEmail?: string;
+  customerGender?: 'Male' | 'Female' | 'Other';
+  customerDob?: string;
   source: BookingSource;
   visitStatus: VisitStatus;
   appointmentDate: string;
   appointmentTime: string;
+  appointmentTimeTo?: string;
   services: VisitServiceEntry[];
   onlineAdvancePaid: number;
   isOnlineAdvanceCredited: boolean;
