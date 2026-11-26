@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
+import { Logo } from './Logo';
 import {
   LayoutDashboard,
   CalendarDays,
@@ -325,10 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="relative flex flex-col max-w-xs w-full bg-white z-10 shadow-2xl h-full">
             {/* Mobile Drawer Header */}
             <div className="px-4 py-3 bg-bode-forest text-white flex items-center justify-between shrink-0">
-              <div>
-                <p className="font-serif font-semibold text-sm leading-tight">BODE Wellness Spa</p>
-                <p className="text-[10px] text-bode-gold/80 tracking-wide mt-0.5">Navigation Menu</p>
-              </div>
+              <Logo variant="compact" tone="light" showSubtitle={true} />
               <button
                 onClick={onCloseMobile}
                 className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition"

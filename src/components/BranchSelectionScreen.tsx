@@ -1,135 +1,161 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BodeLogo } from './BodeLogo';
+import { Logo } from './Logo';
+import { CompactBranchList } from './CompactBranchList';
 import { BranchId } from '../types';
-import { CheckCircle2, MapPin, Leaf, ArrowRight, Phone } from 'lucide-react';
+import { LogOut, Building2, ChevronDown } from 'lucide-react';
 
 interface BranchSelectionScreenProps {
   onBranchSelected: () => void;
 }
 
 export const BranchSelectionScreen: React.FC<BranchSelectionScreenProps> = ({ onBranchSelected }) => {
-  const { currentManager, getAuthorizedBranches, currentBranch, switchBranch } = useApp();
-  const authorizedBranches = getAuthorizedBranches();
-  const [selectedId, setSelectedId] = useState<BranchId | null>(
-    currentBranch?.id || authorizedBranches[0]?.id || null
-  );
+  const {
+    currentManager,
+    getAuthorizedBranches,
+    currentBranch,
+    lastUsedBranchId,
+    isAuthLoading,
+    switchBranch,
+    logout,
+  } = useApp();
 
-  const handleContinue = () => {
-    if (!selectedId) return;
-    if (currentManager && selectedId !== currentManager.branchId) {
-      switchBranch(selectedId);
-    }
-    sessionStorage.setItem('bode_branch_confirmed_v1', '1');
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+  const authorizedBranches = getAuthorizedBranches();
+  const branchCount = authorizedBranches.length;
+
+  const managerInitials =
+    currentManager?.name
+      .split(' ')
+      .map((n) => n[0])
+      .join('') ?? '';
+
+  const handleSelectBranch = (branchId: BranchId) => {
+    switchBranch(branchId);
     onBranchSelected();
   };
 
+  const handleLogout = () => {
+    setShowLogoutConfirm(false);
+    logout();
+  };
+
   return (
-    <div className="min-h-screen bg-bode-ivory flex flex-col justify-center items-center p-4 sm:p-8 relative overflow-hidden">
-      <div className="absolute top-0 right-0 w-96 h-96 bg-bode-emerald/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
-      <div className="absolute bottom-0 left-0 w-96 h-96 bg-bode-gold/10 rounded-full blur-3xl -ml-32 -mb-32 pointer-events-none" />
+    <div className="min-h-screen bg-bode-ivory flex flex-col justify-center items-center p-4 sm:p-6 relative overflow-x-hidden">
+      {/* Subtle background decorations matching login page */}
+      <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-bode-emerald/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-bode-gold/8 rounded-full blur-3xl -ml-32 -mb-32 pointer-events-none" />
 
-      <div className="w-full max-w-3xl z-10 space-y-6">
-        {/* Top Logo & Header */}
-        <div className="text-center space-y-3">
-          <div className="inline-flex justify-center bg-bode-forest px-5 py-3 rounded-2xl shadow-md">
-            <BodeLogo variant="light" size="md" />
-          </div>
-          <div>
-            <h1 className="font-serif text-2xl sm:text-3xl font-bold text-bode-forest">
-              Select Your Branch
-            </h1>
-            <p className="text-xs sm:text-sm text-bode-muted mt-1">
-              Welcome back, <strong className="text-bode-forest">{currentManager?.name}</strong>. Choose the branch you are managing today.
-            </p>
-          </div>
-        </div>
+      <div className="w-full max-w-lg z-10 space-y-4">
+        {/* Card */}
+        <div className="bg-white rounded-2xl shadow-xl border border-bode-border/70 overflow-hidden">
 
-        {/* Branch Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {authorizedBranches.map((branch) => {
-            const isSelected = selectedId === branch.id;
+          {/* Header Banner — matches LoginScreen style */}
+          <div className="bg-bode-forest px-5 sm:px-8 pt-6 pb-5">
+            <div className="flex items-center justify-between gap-4">
+              {/* Logo */}
+              <Logo variant="compact" tone="light" showSubtitle={false} />
 
-            return (
-              <button
-                key={branch.id}
-                type="button"
-                onClick={() => setSelectedId(branch.id)}
-                className={`text-left rounded-2xl border-2 overflow-hidden transition-all shadow-sm hover:shadow-md flex flex-col ${
-                  isSelected
-                    ? 'border-bode-gold bg-white ring-2 ring-bode-gold/30'
-                    : 'border-bode-border bg-white/90 hover:border-bode-emerald/50'
-                }`}
-              >
-                <div className="relative h-36 w-full bg-bode-forest overflow-hidden">
-                  {branch.imageUrl ? (
-                    <img
-                      src={branch.imageUrl}
-                      alt={branch.shortName}
-                      className="w-full h-full object-cover opacity-90"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-bode-gold">
-                      <Leaf className="w-10 h-10" />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-bode-forest/85 via-bode-forest/20 to-transparent" />
-                  <div className="absolute top-3 right-3">
-                    {isSelected ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-bode-gold text-bode-forest text-[11px] font-bold shadow">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Selected
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-black/40 text-white/90 text-[11px] font-medium backdrop-blur-sm">
-                        Tap to select
-                      </span>
-                    )}
+              {/* Manager info + logout */}
+              <div className="flex items-center gap-2">
+                {/* Avatar */}
+                {currentManager?.avatarUrl ? (
+                  <img
+                    src={currentManager.avatarUrl}
+                    alt={currentManager.name}
+                    className="w-8 h-8 rounded-full object-cover border border-white/30 shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-bode-gold text-bode-forest font-bold text-xs flex items-center justify-center shrink-0 border border-white/20">
+                    {managerInitials}
                   </div>
-                  <div className="absolute bottom-3 left-4 right-4 text-white">
-                    <p className="text-[10px] uppercase tracking-widest text-bode-gold font-semibold">
-                      {branch.tagline}
-                    </p>
-                    <h2 className="font-serif text-lg font-bold leading-snug">
-                      {branch.shortName}
-                    </h2>
-                  </div>
+                )}
+                <div className="hidden sm:block text-left">
+                  <p className="text-xs font-semibold text-bode-ivory leading-tight truncate max-w-[120px]">
+                    {currentManager?.name}
+                  </p>
+                  <p className="text-[10px] text-bode-gold uppercase tracking-wider">
+                    {currentManager?.role}
+                  </p>
                 </div>
+                {/* Logout button */}
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirm(true)}
+                  title="Sign Out"
+                  aria-label="Sign Out"
+                  className="ml-1 p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition shrink-0"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
 
-                <div className="p-4 space-y-2 flex-1 flex flex-col justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-bode-forest">{branch.name}</p>
-                    <p className="text-[11px] text-bode-muted flex items-start gap-1.5 mt-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-bode-emerald shrink-0 mt-0.5" />
-                      <span>{branch.address}</span>
-                    </p>
-                  </div>
-                  <div className="pt-2 border-t border-bode-border/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-bode-muted">
-                    <span className="flex items-center gap-1">
-                      <Phone className="w-3 h-3 text-bode-emerald" />
-                      {branch.phone}
-                    </span>
-                    <span>GSTIN: {branch.gstin}</span>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+            {/* Title row */}
+            <div className="mt-5 mb-1">
+              <h1 className="font-serif text-xl sm:text-2xl font-bold text-white leading-tight">
+                Select Branch
+              </h1>
+              <p className="text-xs text-bode-ivory/70 mt-1">
+                Choose a branch to continue.
+                {branchCount > 0 && (
+                  <span className="ml-1.5 inline-flex items-center gap-1 text-bode-gold font-medium">
+                    <Building2 className="w-3 h-3" />
+                    {branchCount} {branchCount === 1 ? 'branch' : 'branches'} available
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Compact Branch List */}
+          <CompactBranchList
+            branches={authorizedBranches}
+            selectedBranchId={currentBranch?.id ?? null}
+            lastUsedBranchId={lastUsedBranchId}
+            isLoading={isAuthLoading}
+            onSelectBranch={handleSelectBranch}
+            maxListHeightClass="max-h-[55vh]"
+          />
         </div>
 
-        {/* Continue CTA */}
-        <div className="flex justify-center pt-2">
-          <button
-            type="button"
-            disabled={!selectedId}
-            onClick={handleContinue}
-            className="w-full sm:w-auto min-w-[280px] py-3.5 px-8 rounded-xl bg-bode-forest hover:bg-bode-forestLight text-white font-semibold text-sm tracking-wide shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            <span>CONTINUE TO DASHBOARD</span>
-            <ArrowRight className="w-4 h-4 text-bode-gold" />
-          </button>
-        </div>
+        {/* Footer */}
+        <p className="text-center text-xs text-bode-muted">
+          © {new Date().getFullYear()} BODE Wellness Spa
+        </p>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-bode-charcoal border border-bode-border">
+            <h3 className="font-serif text-lg font-semibold text-bode-forest mb-2">
+              Sign Out?
+            </h3>
+            <p className="text-xs text-bode-muted mb-5 leading-relaxed">
+              You'll be returned to the login page and will need to sign in again to access
+              the application.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirm(false)}
+                className="px-4 py-2 text-xs font-medium text-bode-charcoal bg-bode-ivory hover:bg-bode-border rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-4 py-2 text-xs font-medium text-white bg-bode-forest hover:bg-bode-emerald rounded-lg transition"
+              >
+                Yes, Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

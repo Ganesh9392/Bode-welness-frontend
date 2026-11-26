@@ -1,0 +1,15 @@
+{
+  "name": "BODE Wellness Spa",
+  "short_name": "BODE Spa",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8F5E9",
+  "theme_color": "#073F32",
+  "icons": [
+    {
+      "src": "/bode-logo-v2.jpeg",
+      "sizes": "any",
+      "type": "image/jpeg"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Branch,
   BranchId,
@@ -46,6 +46,11 @@ interface AppContextType {
   // Auth
   currentManager: ManagerUser | null;
   currentBranch: Branch | null;
+  selectedBranchId: BranchId | null;
+  lastUsedBranchId: BranchId | null;
+  isAuthLoading: boolean;
+  authNotice: string | null;
+  clearAuthNotice: () => void;
   login: (username: string, password: string, remember?: boolean) => { success: boolean; message?: string };
   logout: () => void;
   switchDemoManager: (username: string) => void;
@@ -188,7 +193,10 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  AUTH_USER: 'bode_spa_auth_user_v1',
+  AUTH_SESSION: 'bode_spa_session_v2',
+  LEGACY_AUTH_USER: 'bode_spa_auth_user_v1',
+  LEGACY_BRANCH_CONFIRMED: 'bode_branch_confirmed_v1',
+  LAST_BRANCH_MAP: 'bode_spa_last_branch_by_user_v1',
   VISITS: 'bode_spa_visits_v2',
   CUSTOMERS: 'bode_spa_customers_v2',
   STAFF: 'bode_spa_staff_v3',
@@ -200,20 +208,221 @@ const STORAGE_KEYS = {
   EXPENSES: 'bode_spa_expenses_v1',
 };
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Initial Auth: load saved or default to Priya Sharma (ECIL branch)
-  const [currentManager, setCurrentManager] = useState<ManagerUser | null>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.AUTH_USER);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error('Failed to parse saved auth', e);
+interface AuthSession {
+  version: 2;
+  token: string;
+  userId: string;
+  user: ManagerUser;
+  selectedBranchId: BranchId | null;
+  remember: boolean;
+  issuedAt: number;
+  expiresAt: number;
+}
+
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const SESSION_REMEMBER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function createSessionToken(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `bode_sess_${crypto.randomUUID()}`;
+  }
+  return `bode_sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function clearStoredSession(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
+    localStorage.removeItem(STORAGE_KEYS.LEGACY_AUTH_USER);
+  } catch {}
+  try {
+    sessionStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
+    sessionStorage.removeItem(STORAGE_KEYS.LEGACY_AUTH_USER);
+    sessionStorage.removeItem(STORAGE_KEYS.LEGACY_BRANCH_CONFIRMED);
+  } catch {}
+}
+
+function persistSession(session: AuthSession): void {
+  clearStoredSession();
+  const serialized = JSON.stringify(session);
+  try {
+    if (session.remember) {
+      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, serialized);
+    } else {
+      sessionStorage.setItem(STORAGE_KEYS.AUTH_SESSION, serialized);
     }
-    // Default logged in manager for instant testing convenience
-    const defaultMgr = MANAGERS[0];
-    const { passwordHash, ...user } = defaultMgr;
-    return user;
-  });
+  } catch {}
+}
+
+function readStoredSession(): { session: AuthSession | null; expiredOrInvalid: boolean } {
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(STORAGE_KEYS.AUTH_SESSION) || localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+  } catch {
+    return { session: null, expiredOrInvalid: false };
+  }
+
+  // Clean up legacy unvalidated auth keys from prior deployments
+  if (!raw) {
+    let hadLegacy = false;
+    try {
+      hadLegacy = Boolean(
+        localStorage.getItem(STORAGE_KEYS.LEGACY_AUTH_USER) ||
+          sessionStorage.getItem(STORAGE_KEYS.LEGACY_AUTH_USER) ||
+          sessionStorage.getItem(STORAGE_KEYS.LEGACY_BRANCH_CONFIRMED)
+      );
+    } catch {}
+    if (hadLegacy) {
+      clearStoredSession();
+    }
+    return { session: null, expiredOrInvalid: false };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<AuthSession>;
+    if (
+      !parsed ||
+      parsed.version !== 2 ||
+      typeof parsed.token !== 'string' ||
+      !parsed.token.startsWith('bode_sess_') ||
+      typeof parsed.userId !== 'string' ||
+      !parsed.user ||
+      typeof parsed.expiresAt !== 'number'
+    ) {
+      clearStoredSession();
+      return { session: null, expiredOrInvalid: true };
+    }
+
+    if (Date.now() > parsed.expiresAt) {
+      clearStoredSession();
+      return { session: null, expiredOrInvalid: true };
+    }
+
+    const matchedManager = MANAGERS.find((m) => m.id === parsed.userId);
+    if (!matchedManager) {
+      clearStoredSession();
+      return { session: null, expiredOrInvalid: true };
+    }
+
+    const { passwordHash: _, ...cleanUser } = matchedManager;
+    const authorizedIds = cleanUser.authorizedBranchIds || [cleanUser.branchId];
+    const explicitBranchId =
+      parsed.selectedBranchId &&
+      authorizedIds.includes(parsed.selectedBranchId) &&
+      BRANCHES.some((b) => b.id === parsed.selectedBranchId)
+        ? parsed.selectedBranchId
+        : null;
+    const validBranchId =
+      explicitBranchId ??
+      (authorizedIds.length === 1 && BRANCHES.some((b) => b.id === authorizedIds[0])
+        ? authorizedIds[0]
+        : null);
+
+    const syncedUser: ManagerUser = validBranchId
+      ? {
+          ...cleanUser,
+          branchId: validBranchId,
+          branchName: BRANCHES.find((b) => b.id === validBranchId)?.name || cleanUser.branchName,
+        }
+      : cleanUser;
+
+    return {
+      session: {
+        version: 2,
+        token: parsed.token,
+        userId: cleanUser.id,
+        user: syncedUser,
+        selectedBranchId: validBranchId,
+        remember: Boolean(parsed.remember),
+        issuedAt: typeof parsed.issuedAt === 'number' ? parsed.issuedAt : Date.now(),
+        expiresAt: parsed.expiresAt,
+      },
+      expiredOrInvalid: false,
+    };
+  } catch {
+    clearStoredSession();
+    return { session: null, expiredOrInvalid: true };
+  }
+}
+
+function readLastUsedBranchMap(): Record<string, BranchId> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.LAST_BRANCH_MAP);
+    if (raw) return JSON.parse(raw) as Record<string, BranchId>;
+  } catch {}
+  return {};
+}
+
+function saveLastUsedBranch(userId: string, branchId: BranchId): void {
+  try {
+    const current = readLastUsedBranchMap();
+    current[userId] = branchId;
+    localStorage.setItem(STORAGE_KEYS.LAST_BRANCH_MAP, JSON.stringify(current));
+  } catch {}
+}
+
+export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [currentManager, setCurrentManager] = useState<ManagerUser | null>(null);
+  const [selectedBranchId, setSelectedBranchId] = useState<BranchId | null>(null);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
+  const [sessionRemember, setSessionRemember] = useState<boolean>(false);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [lastBranchMap, setLastBranchMap] = useState<Record<string, BranchId>>(() =>
+    readLastUsedBranchMap()
+  );
+
+  // Validate persisted session on mount before showing any protected or login screen
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const { session, expiredOrInvalid } = readStoredSession();
+      if (session) {
+        setCurrentManager(session.user);
+        setSelectedBranchId(session.selectedBranchId);
+        setSessionExpiresAt(session.expiresAt);
+        setSessionRemember(session.remember);
+        setSessionToken(session.token);
+        setAuthNotice(null);
+      } else {
+        setCurrentManager(null);
+        setSelectedBranchId(null);
+        setSessionExpiresAt(null);
+        setSessionToken(null);
+        if (expiredOrInvalid) {
+          setAuthNotice('Session expired, please log in again');
+        }
+      }
+      setIsAuthLoading(false);
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Monitor runtime session expiry
+  useEffect(() => {
+    if (!currentManager || !sessionExpiresAt) return;
+
+    const checkExpiry = () => {
+      if (Date.now() > sessionExpiresAt) {
+        clearStoredSession();
+        setCurrentManager(null);
+        setSelectedBranchId(null);
+        setSessionExpiresAt(null);
+        setSessionToken(null);
+        setAuthNotice('Session expired, please log in again');
+      }
+    };
+
+    const interval = window.setInterval(checkExpiry, 15000);
+    window.addEventListener('focus', checkExpiry);
+    document.addEventListener('visibilitychange', checkExpiry);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', checkExpiry);
+      document.removeEventListener('visibilitychange', checkExpiry);
+    };
+  }, [currentManager, sessionExpiresAt]);
 
   // Load Data with LocalStorage Persistence
   const [visits, setVisits] = useState<CustomerVisit[]>(() => {
@@ -349,11 +558,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses));
     } catch (e) {}
   }, [expenses]);
-  // Current branch determined strictly by the authenticated manager
+  // Current branch determined strictly by the authenticated manager + selected branch
   const currentBranch = useMemo<Branch | null>(() => {
+    if (!currentManager || !selectedBranchId) return null;
+    const authorized = currentManager.authorizedBranchIds || [currentManager.branchId];
+    if (!authorized.includes(selectedBranchId)) return null;
+    return BRANCHES.find((b) => b.id === selectedBranchId) || null;
+  }, [currentManager, selectedBranchId]);
+
+  const lastUsedBranchId = useMemo<BranchId | null>(() => {
     if (!currentManager) return null;
-    return BRANCHES.find((b) => b.id === currentManager.branchId) || null;
-  }, [currentManager]);
+    const candidate = lastBranchMap[currentManager.id];
+    if (!candidate) return null;
+    const authorized = currentManager.authorizedBranchIds || [currentManager.branchId];
+    return authorized.includes(candidate) && BRANCHES.some((b) => b.id === candidate)
+      ? candidate
+      : null;
+  }, [currentManager, lastBranchMap]);
 
   // Filter all data strictly to the logged-in manager's assigned branch
   const branchVisits = useMemo(() => {
@@ -393,6 +614,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [expenses, currentBranch]);
   // ─── Authentication Handlers ────────────────────────────────────────────────
 
+  const clearAuthNotice = useCallback(() => {
+    setAuthNotice(null);
+  }, []);
+
   const login = (username: string, password: string, remember: boolean = true) => {
     const trimmedUser = username.trim().toLowerCase();
     const found = MANAGERS.find(
@@ -400,11 +625,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (found) {
-      const { passwordHash, ...user } = found;
+      const { passwordHash, ...baseUser } = found;
+      const authorizedIds = baseUser.authorizedBranchIds || [baseUser.branchId];
+      const authorizedBranches = BRANCHES.filter((b) => authorizedIds.includes(b.id));
+      const autoBranch = authorizedBranches.length === 1 ? authorizedBranches[0] : null;
+
+      const user: ManagerUser = autoBranch
+        ? { ...baseUser, branchId: autoBranch.id, branchName: autoBranch.name }
+        : baseUser;
+
+      const now = Date.now();
+      const expiresAt = now + (remember ? SESSION_REMEMBER_TTL_MS : SESSION_TTL_MS);
+      const token = createSessionToken();
+      const nextSelectedBranchId = autoBranch ? autoBranch.id : null;
+
+      const session: AuthSession = {
+        version: 2,
+        token,
+        userId: user.id,
+        user,
+        selectedBranchId: nextSelectedBranchId,
+        remember,
+        issuedAt: now,
+        expiresAt,
+      };
+
+      persistSession(session);
       setCurrentManager(user);
-      if (remember) {
-        localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(user));
+      setSelectedBranchId(nextSelectedBranchId);
+      setSessionExpiresAt(expiresAt);
+      setSessionRemember(remember);
+      setSessionToken(token);
+      setAuthNotice(null);
+
+      if (autoBranch) {
+        saveLastUsedBranch(user.id, autoBranch.id);
+        setLastBranchMap((prev) => ({ ...prev, [user.id]: autoBranch.id }));
       }
+
       return { success: true };
     }
     return {
@@ -414,20 +672,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    clearStoredSession();
     setCurrentManager(null);
-    localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+    setSelectedBranchId(null);
+    setSessionExpiresAt(null);
+    setSessionRemember(false);
+    setSessionToken(null);
+    setAuthNotice(null);
   };
 
   const switchDemoManager = (username: string) => {
     const found = MANAGERS.find((m) => m.username === username);
     if (found) {
       const { passwordHash, ...user } = found;
-      setCurrentManager(user);
-      localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(user));
+      const authorizedIds = user.authorizedBranchIds || [user.branchId];
+      const authorizedBranches = BRANCHES.filter((b) => authorizedIds.includes(b.id));
+      const autoBranch = authorizedBranches.length === 1 ? authorizedBranches[0] : null;
+      const now = Date.now();
+      const expiresAt = now + SESSION_TTL_MS;
+      const token = createSessionToken();
+      const nextSelectedBranchId = autoBranch ? autoBranch.id : null;
+      const nextUser = autoBranch
+        ? { ...user, branchId: autoBranch.id, branchName: autoBranch.name }
+        : user;
+
+      persistSession({
+        version: 2,
+        token,
+        userId: nextUser.id,
+        user: nextUser,
+        selectedBranchId: nextSelectedBranchId,
+        remember: true,
+        issuedAt: now,
+        expiresAt,
+      });
+
+      setCurrentManager(nextUser);
+      setSelectedBranchId(nextSelectedBranchId);
+      setSessionExpiresAt(expiresAt);
+      setSessionRemember(true);
+      setSessionToken(token);
+      setAuthNotice(null);
     }
   };
 
-  const switchBranch = (branchId: BranchId) => {
+  const switchBranch = useCallback((branchId: BranchId) => {
     if (!currentManager) return;
     const authorized = currentManager.authorizedBranchIds || [currentManager.branchId];
     if (!authorized.includes(branchId)) return;
@@ -435,14 +724,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!branch) return;
     const updated = { ...currentManager, branchId, branchName: branch.name };
     setCurrentManager(updated);
-    localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(updated));
-  };
+    setSelectedBranchId(branchId);
 
-  const getAuthorizedBranches = (): Branch[] => {
+    saveLastUsedBranch(updated.id, branchId);
+    setLastBranchMap((prev) => ({ ...prev, [updated.id]: branchId }));
+
+    if (sessionToken && sessionExpiresAt) {
+      persistSession({
+        version: 2,
+        token: sessionToken,
+        userId: updated.id,
+        user: updated,
+        selectedBranchId: branchId,
+        remember: sessionRemember,
+        issuedAt: Date.now(),
+        expiresAt: sessionExpiresAt,
+      });
+    }
+  }, [currentManager, sessionToken, sessionExpiresAt, sessionRemember]);
+
+  const getAuthorizedBranches = useCallback((): Branch[] => {
     if (!currentManager) return [];
     const ids = currentManager.authorizedBranchIds || [currentManager.branchId];
     return BRANCHES.filter((b) => ids.includes(b.id));
-  };
+  }, [currentManager]);
 
   // ─── Notifications ──────────────────────────────────────────────────────────
 
@@ -1401,6 +1706,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentManager,
         currentBranch,
+        selectedBranchId,
+        lastUsedBranchId,
+        isAuthLoading,
+        authNotice,
+        clearAuthNotice,
         login,
         logout,
         switchDemoManager,
