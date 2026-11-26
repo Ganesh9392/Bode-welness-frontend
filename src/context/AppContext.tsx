@@ -19,6 +19,14 @@ import {
   POSOrder,
   POSCartItem,
   OrderType,
+  CampaignRecord,
+  CampaignStatus,
+  CampaignType,
+  CampaignMetrics,
+  CampaignActivityItem,
+  ExpenseRecord,
+  ExpenseStatus,
+  ExpenseCategory,
 } from '../types';
 import {
   BRANCHES,
@@ -30,6 +38,8 @@ import {
   INITIAL_VISITS,
   INITIAL_NOTIFICATIONS,
   INITIAL_POS_ORDERS,
+  INITIAL_CAMPAIGNS,
+  INITIAL_EXPENSES,
 } from '../data/mockData';
 
 interface AppContextType {
@@ -150,6 +160,29 @@ interface AppContextType {
   updateStaff: (staffId: string, updates: Partial<StaffMember>) => void;
 
   resetToDefaultData: () => void;
+  // Campaigns
+  campaigns: CampaignRecord[];
+  branchCampaigns: CampaignRecord[];
+  createCampaign: (campaignData: Omit<CampaignRecord, 'id' | 'campaignReference' | 'branchId' | 'createdAt' | 'metrics' | 'activityLog'> & {
+    metrics?: Partial<CampaignMetrics>;
+    activityLog?: CampaignActivityItem[];
+    branchId?: BranchId;
+  }) => CampaignRecord;
+  updateCampaign: (campaignId: string, updates: Partial<CampaignRecord>) => CampaignRecord | undefined;
+  updateCampaignStatus: (campaignId: string, status: CampaignStatus) => void;
+  duplicateCampaign: (campaignId: string) => CampaignRecord | undefined;
+  deleteCampaign: (campaignId: string) => void;
+
+  // Expenses
+  expenses: ExpenseRecord[];
+  branchExpenses: ExpenseRecord[];
+  createExpense: (expenseData: Omit<ExpenseRecord, 'id' | 'expenseReference' | 'branchId' | 'createdAt' | 'createdByManager'> & {
+    branchId?: BranchId;
+    createdByManager?: string;
+  }) => ExpenseRecord;
+  updateExpense: (expenseId: string, updates: Partial<ExpenseRecord>) => ExpenseRecord | undefined;
+  updateExpenseStatus: (expenseId: string, status: ExpenseStatus) => void;
+  deleteExpense: (expenseId: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -163,6 +196,8 @@ const STORAGE_KEYS = {
   POS_ORDERS: 'bode_spa_pos_orders_v1',
   STAFF_CATEGORIES: 'bode_spa_service_categories_v1',
   SERVICES: 'bode_spa_services_v1',
+  CAMPAIGNS: 'bode_spa_campaigns_v1',
+  EXPENSES: 'bode_spa_expenses_v1',
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -235,6 +270,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return SERVICE_CATEGORIES;
   });
 
+
+  const [campaigns, setCampaigns] = useState<CampaignRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CAMPAIGNS);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return INITIAL_CAMPAIGNS;
+  });
+
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.EXPENSES);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return INITIAL_EXPENSES;
+  });
   const [services, setServices] = useState<ServiceItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SERVICES);
@@ -286,6 +337,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [services]);
 
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CAMPAIGNS, JSON.stringify(campaigns));
+    } catch (e) {}
+  }, [campaigns]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses));
+    } catch (e) {}
+  }, [expenses]);
   // Current branch determined strictly by the authenticated manager
   const currentBranch = useMemo<Branch | null>(() => {
     if (!currentManager) return null;
@@ -318,6 +381,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return posOrders.filter((o) => o.branchId === currentBranch.id);
   }, [posOrders, currentBranch]);
 
+
+  const branchCampaigns = useMemo(() => {
+    if (!currentBranch) return [];
+    return campaigns.filter((c) => c.branchId === currentBranch.id);
+  }, [campaigns, currentBranch]);
+
+  const branchExpenses = useMemo(() => {
+    if (!currentBranch) return [];
+    return expenses.filter((e) => e.branchId === currentBranch.id);
+  }, [expenses, currentBranch]);
   // ─── Authentication Handlers ────────────────────────────────────────────────
 
   const login = (username: string, password: string, remember: boolean = true) => {
@@ -1076,6 +1149,230 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+
+  // ─── Campaigns Management ───────────────────────────────────────────────────
+
+  const createCampaign = (
+    campaignData: Omit<CampaignRecord, 'id' | 'campaignReference' | 'branchId' | 'createdAt' | 'metrics' | 'activityLog'> & {
+      metrics?: Partial<CampaignMetrics>;
+      activityLog?: CampaignActivityItem[];
+      branchId?: BranchId;
+    }
+  ): CampaignRecord => {
+    const branch = campaignData.branchId || currentBranch?.id || 'branch-ecil';
+    const serial = String(campaigns.length + 101).padStart(3, '0');
+    const branchPrefix = branch === 'branch-nagole' ? 'NAG' : 'ECIL';
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    const defaultMetrics: CampaignMetrics = {
+      reach: 0,
+      impressions: 0,
+      clicks: 0,
+      engagement: 0,
+      leadsGenerated: 0,
+      bookingsCount: 0,
+      conversions: 0,
+      conversionRate: 0,
+      amountSpent: 0,
+      revenueGenerated: 0,
+      roiPercent: 0,
+      ...campaignData.metrics,
+    };
+
+    const initialActivity: CampaignActivityItem[] = campaignData.activityLog || [
+      {
+        id: `act-${Date.now().toString(36)}`,
+        action: 'Campaign Created',
+        timestamp: `${dateStr} ${timeStr}`,
+        detail: `Created as ${campaignData.status || 'DRAFT'}`,
+        performedBy: currentManager?.name || 'Manager',
+      },
+    ];
+
+    const newCampaign: CampaignRecord = {
+      ...campaignData,
+      id: `cmp-${Date.now().toString(36)}`,
+      campaignReference: `CMP-${branchPrefix}-${now.getFullYear()}-${serial}`,
+      branchId: branch,
+      status: campaignData.status || 'DRAFT',
+      metrics: defaultMetrics,
+      activityLog: initialActivity,
+      createdAt: `${dateStr} ${timeStr}`,
+      createdByManager: currentManager?.name || 'Manager',
+    };
+
+    setCampaigns((prev) => [newCampaign, ...prev]);
+    return newCampaign;
+  };
+
+  const updateCampaign = (campaignId: string, updates: Partial<CampaignRecord>): CampaignRecord | undefined => {
+    let updatedRecord: CampaignRecord | undefined;
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    setCampaigns((prev) =>
+      prev.map((c) => {
+        if (c.id === campaignId) {
+          updatedRecord = {
+            ...c,
+            ...updates,
+            updatedAt: `${dateStr} ${timeStr}`,
+          };
+          return updatedRecord;
+        }
+        return c;
+      })
+    );
+    return updatedRecord;
+  };
+
+  const updateCampaignStatus = (campaignId: string, status: CampaignStatus) => {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    setCampaigns((prev) =>
+      prev.map((c) => {
+        if (c.id === campaignId) {
+          const newAct: CampaignActivityItem = {
+            id: `act-${Date.now().toString(36)}`,
+            action: `Status changed to ${status}`,
+            timestamp: `${dateStr} ${timeStr}`,
+            performedBy: currentManager?.name || 'Manager',
+          };
+          return {
+            ...c,
+            status,
+            updatedAt: `${dateStr} ${timeStr}`,
+            activityLog: [newAct, ...(c.activityLog || [])],
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const duplicateCampaign = (campaignId: string): CampaignRecord | undefined => {
+    const target = campaigns.find((c) => c.id === campaignId);
+    if (!target) return undefined;
+
+    const branchPrefix = target.branchId === 'branch-nagole' ? 'NAG' : 'ECIL';
+    const serial = String(campaigns.length + 101).padStart(3, '0');
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    const duplicate: CampaignRecord = {
+      ...target,
+      id: `cmp-${Date.now().toString(36)}`,
+      campaignReference: `CMP-${branchPrefix}-${now.getFullYear()}-${serial}`,
+      name: `${target.name} (Copy)`,
+      status: 'DRAFT',
+      metrics: {
+        reach: 0,
+        impressions: 0,
+        clicks: 0,
+        engagement: 0,
+        leadsGenerated: 0,
+        bookingsCount: 0,
+        conversions: 0,
+        conversionRate: 0,
+        amountSpent: 0,
+        revenueGenerated: 0,
+        roiPercent: 0,
+      },
+      activityLog: [
+        {
+          id: `act-${Date.now().toString(36)}`,
+          action: 'Campaign Duplicated',
+          timestamp: `${dateStr} ${timeStr}`,
+          detail: `Duplicated from ${target.campaignReference}`,
+          performedBy: currentManager?.name || 'Manager',
+        },
+      ],
+      createdAt: `${dateStr} ${timeStr}`,
+      updatedAt: undefined,
+    };
+
+    setCampaigns((prev) => [duplicate, ...prev]);
+    return duplicate;
+  };
+
+  const deleteCampaign = (campaignId: string) => {
+    setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
+  };
+
+  // ─── Expenses Management ────────────────────────────────────────────────────
+
+  const createExpense = (
+    expenseData: Omit<ExpenseRecord, 'id' | 'expenseReference' | 'branchId' | 'createdAt' | 'createdByManager'> & {
+      branchId?: BranchId;
+      createdByManager?: string;
+    }
+  ): ExpenseRecord => {
+    const branch = expenseData.branchId || currentBranch?.id || 'branch-ecil';
+    const serial = String(expenses.length + 101).padStart(3, '0');
+    const branchPrefix = branch === 'branch-nagole' ? 'NAG' : 'ECIL';
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    const newExpense: ExpenseRecord = {
+      ...expenseData,
+      id: `exp-${Date.now().toString(36)}`,
+      expenseReference: `EXP-${branchPrefix}-${now.getFullYear()}-${serial}`,
+      branchId: branch,
+      status: expenseData.status || 'PENDING',
+      createdByManager: expenseData.createdByManager || currentManager?.name || 'Manager',
+      createdAt: `${dateStr} ${timeStr}`,
+    };
+
+    setExpenses((prev) => [newExpense, ...prev]);
+    return newExpense;
+  };
+
+  const updateExpense = (expenseId: string, updates: Partial<ExpenseRecord>): ExpenseRecord | undefined => {
+    let updatedRecord: ExpenseRecord | undefined;
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    setExpenses((prev) =>
+      prev.map((e) => {
+        if (e.id === expenseId) {
+          updatedRecord = {
+            ...e,
+            ...updates,
+            updatedAt: `${dateStr} ${timeStr}`,
+          };
+          return updatedRecord;
+        }
+        return e;
+      })
+    );
+    return updatedRecord;
+  };
+
+  const updateExpenseStatus = (expenseId: string, status: ExpenseStatus) => {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0, 5);
+
+    setExpenses((prev) =>
+      prev.map((e) =>
+        e.id === expenseId
+          ? { ...e, status, updatedAt: `${dateStr} ${timeStr}` }
+          : e
+      )
+    );
+  };
+
+  const deleteExpense = (expenseId: string) => {
+    setExpenses((prev) => prev.filter((e) => e.id !== expenseId));
+  };
   // ─── Reset ──────────────────────────────────────────────────────────────────
 
   const resetToDefaultData = () => {
@@ -1093,6 +1390,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPosOrders(INITIAL_POS_ORDERS);
     setServiceCategories(SERVICE_CATEGORIES);
     setServices(SERVICES_CATALOGUE);
+    localStorage.removeItem(STORAGE_KEYS.CAMPAIGNS);
+    localStorage.removeItem(STORAGE_KEYS.EXPENSES);
+    setCampaigns(INITIAL_CAMPAIGNS);
+    setExpenses(INITIAL_EXPENSES);
   };
 
   return (
@@ -1143,6 +1444,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createStaff,
         updateStaff,
         resetToDefaultData,
+        campaigns,
+        branchCampaigns,
+        createCampaign,
+        updateCampaign,
+        updateCampaignStatus,
+        duplicateCampaign,
+        deleteCampaign,
+        expenses,
+        branchExpenses,
+        createExpense,
+        updateExpense,
+        updateExpenseStatus,
+        deleteExpense,
       }}
     >
       {children}

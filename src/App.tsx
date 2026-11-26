@@ -23,6 +23,8 @@ import { StaffPage } from './pages/StaffPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { InvoicesPage } from './pages/InvoicesPage';
 import { PaymentsPage } from './pages/PaymentsPage';
+import { CampaignsPage } from './pages/CampaignsPage';
+import { ExpensesPage } from './pages/ExpensesPage';
 
 // Modals
 import { AddServiceModal } from './components/AddServiceModal';
@@ -184,14 +186,7 @@ export const AppContent: React.FC = () => {
             />
           )}
 
-          {activeTab === 'expenses' && (
-            <ComingSoon
-              title="Expenses"
-              description="Track branch expenses, vendor payments, consumables, and operational costs."
-              icon={<Receipt className="w-8 h-8" />}
-              phase="Phase 2"
-            />
-          )}
+          {activeTab === 'expenses' && <ExpensesPage />}
 
           {activeTab === 'enquiries' && (
             <ComingSoon
@@ -202,14 +197,7 @@ export const AppContent: React.FC = () => {
             />
           )}
 
-          {activeTab === 'campaign' && (
-            <ComingSoon
-              title="Campaigns"
-              description="Create and manage promotional campaigns, WhatsApp/SMS broadcasts, and seasonal offers."
-              icon={<Megaphone className="w-8 h-8" />}
-              phase="Phase 2"
-            />
-          )}
+          {activeTab === 'campaign' && <CampaignsPage />}
 
           {activeTab === 'master-bo' && (
             <ComingSoon

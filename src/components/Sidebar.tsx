@@ -118,7 +118,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'expenses',
           label: 'Expenses',
           icon: Receipt,
-          isComingSoon: true,
         },
         {
           id: 'enquiries',
@@ -130,7 +129,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'campaign',
           label: 'Campaign',
           icon: Megaphone,
-          isComingSoon: true,
         },
         {
           id: 'master-bo',
