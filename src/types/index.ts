@@ -341,3 +341,141 @@ export interface POSOrder {
   notes?: string;
   visitId?: string; // link to CustomerVisit if service-based
 }
+
+
+// ─── Campaigns ───────────────────────────────────────────────────────────────
+
+export type CampaignType =
+  | 'WhatsApp Broadcast'
+  | 'Seasonal Promotion'
+  | 'Social Media Ad'
+  | 'SMS Alert'
+  | 'Membership Drive'
+  | 'Loyalty & Referral';
+
+export type CampaignObjective =
+  | 'Bookings & Appointments'
+  | 'Lead Generation'
+  | 'Brand Awareness'
+  | 'Repeat Visits & Retention'
+  | 'Membership Signups';
+
+export type CampaignChannel =
+  | 'WhatsApp'
+  | 'SMS'
+  | 'Instagram'
+  | 'Facebook'
+  | 'Email'
+  | 'Digital Catalogue';
+
+export type CampaignStatus =
+  | 'DRAFT'
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export interface CampaignMediaAttachment {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string;
+  uploadedAt: string;
+}
+
+export interface CampaignActivityItem {
+  id: string;
+  action: string;
+  timestamp: string;
+  detail?: string;
+  performedBy: string;
+}
+
+export interface CampaignMetrics {
+  reach: number;
+  impressions: number;
+  clicks: number;
+  engagement: number;
+  leadsGenerated: number;
+  bookingsCount: number;
+  conversions: number;
+  conversionRate: number;
+  amountSpent: number;
+  revenueGenerated: number;
+  roiPercent: number;
+}
+
+export interface CampaignRecord {
+  id: string;
+  campaignReference: string;
+  branchId: BranchId;
+  name: string;
+  description: string;
+  type: CampaignType;
+  objective: CampaignObjective;
+  targetAudience: string;
+  audienceSegment?: string;
+  locationScope?: string;
+  startDate: string;
+  endDate: string;
+  budget: number;
+  channels: CampaignChannel[];
+  contentHeadline?: string;
+  contentBody: string;
+  ctaText?: string;
+  promoCode?: string;
+  promoLink?: string;
+  showOnDigitalCatalogue?: boolean;
+  media?: CampaignMediaAttachment;
+  imageUrl?: string;
+  status: CampaignStatus;
+  metrics: CampaignMetrics;
+  activityLog: CampaignActivityItem[];
+  createdAt: string;
+  updatedAt?: string;
+  createdByManager?: string;
+}
+
+// ─── Expenses ────────────────────────────────────────────────────────────────
+
+export type ExpenseCategory =
+  | 'Spa Consumables & Oils'
+  | 'Linen & Laundry'
+  | 'Utilities & Rent'
+  | 'Facility Maintenance'
+  | 'Staff Welfare & Pantry'
+  | 'Marketing & Promotions'
+  | 'Equipment & Supplies'
+  | 'Miscellaneous';
+
+export type ExpenseStatus = 'PAID' | 'PENDING' | 'APPROVED' | 'CANCELLED';
+
+export type ExpensePaymentMethod = 'UPI' | 'CASH' | 'CARD' | 'BANK_TRANSFER';
+
+export interface ExpenseReceiptAttachment {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string;
+  uploadedAt: string;
+}
+
+export interface ExpenseRecord {
+  id: string;
+  expenseReference: string;
+  branchId: BranchId;
+  title: string;
+  category: ExpenseCategory;
+  vendorName?: string;
+  amount: number;
+  expenseDate: string;
+  paymentMethod: ExpensePaymentMethod;
+  paymentReference?: string;
+  status: ExpenseStatus;
+  description?: string;
+  receipt?: ExpenseReceiptAttachment;
+  createdByManager: string;
+  createdAt: string;
+  updatedAt?: string;
+}
