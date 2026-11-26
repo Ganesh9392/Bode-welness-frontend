@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from './context/AppContext';
 import { CustomerVisit, VisitServiceEntry } from './types';
 import { Navbar } from './components/Navbar';
@@ -8,7 +8,8 @@ import { LoginScreen } from './components/LoginScreen';
 import { BranchSelectionScreen } from './components/BranchSelectionScreen';
 import { BranchSwitchModal } from './components/BranchSwitchModal';
 import { ComingSoon } from './components/ComingSoon';
-import { Receipt, MessageSquare, Megaphone, Database, Settings } from 'lucide-react';
+import { Logo } from './components/Logo';
+import { MessageSquare, Database, Settings, Building2, MapPin, Phone, Mail } from 'lucide-react';
 
 // Pages
 import { DashboardPage } from './pages/DashboardPage';
@@ -33,15 +34,52 @@ import { InvoiceModal } from './components/InvoiceModal';
 import { WhatsAppSendModal } from './components/WhatsAppSendModal';
 import { RecordPaymentModal } from './components/RecordPaymentModal';
 
+const TAB_PATHS: Record<string, string> = {
+  dashboard: '/dashboard',
+  pos: '/pos',
+  appointments: '/appointments',
+  'active-services': '/active-services',
+  'create-service': '/create-service',
+  customers: '/customers',
+  backoffice: '/backoffice',
+  reports: '/reports',
+  expenses: '/expenses',
+  enquiries: '/enquiries',
+  campaign: '/campaign',
+  'master-bo': '/master-bo',
+  settings: '/settings',
+  invoices: '/invoices',
+  payments: '/payments',
+  staff: '/staff',
+};
+
+const PATH_TO_TAB: Record<string, string> = Object.entries(TAB_PATHS).reduce(
+  (acc, [tab, path]) => {
+    acc[path] = tab;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
+function parseProtectedRoute(pathname: string): { tab: string; visitId: string | null } | null {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/') {
+    return { tab: 'dashboard', visitId: null };
+  }
+  if (PATH_TO_TAB[clean]) {
+    return { tab: PATH_TO_TAB[clean], visitId: null };
+  }
+  if (clean.startsWith('/visit/')) {
+    const id = decodeURIComponent(clean.slice('/visit/'.length));
+    if (id) return { tab: 'visit-detail', visitId: id };
+  }
+  return null;
+}
+
 export const AppContent: React.FC = () => {
-  const { currentManager } = useApp();
+  const { currentManager, currentBranch, isAuthLoading, getAuthorizedBranches, switchBranch } = useApp();
 
-  const [branchConfirmed, setBranchConfirmed] = useState<boolean>(() => {
-    return sessionStorage.getItem('bode_branch_confirmed_v1') === '1';
-  });
-
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
+  const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/');
   const [autoAssignVisitId, setAutoAssignVisitId] = useState<string | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [showBranchSwitcher, setShowBranchSwitcher] = useState<boolean>(false);
@@ -56,35 +94,112 @@ export const AppContent: React.FC = () => {
   const [whatsAppVisit, setWhatsAppVisit] = useState<CustomerVisit | null>(null);
   const [paymentVisit, setPaymentVisit] = useState<CustomerVisit | null>(null);
 
-  useEffect(() => {
-    if (!currentManager) {
-      sessionStorage.removeItem('bode_branch_confirmed_v1');
-      setBranchConfirmed(false);
+  const navigatePath = (path: string, replace = false) => {
+    if (window.location.pathname !== path) {
+      if (replace) {
+        window.history.replaceState(null, '', path);
+      } else {
+        window.history.pushState(null, '', path);
+      }
     }
-  }, [currentManager]);
+    setCurrentPath(path);
+  };
 
-  // Step 1: Login Screen
+  // Sync browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname || '/');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Route Guard: enforce Login -> Branch Selection -> Dashboard / Protected App
+  useEffect(() => {
+    if (isAuthLoading) return;
+
+    const cleanPath = currentPath.replace(/\/+$/, '') || '/';
+
+    if (!currentManager) {
+      setIsMobileSidebarOpen(false);
+      setShowBranchSwitcher(false);
+      setAutoAssignVisitId(null);
+      setAddServiceVisit(null);
+      setDiscountTarget(null);
+      setInvoiceVisit(null);
+      setWhatsAppVisit(null);
+      setPaymentVisit(null);
+      // Replace the current history entry with /login so that browser back
+      // navigation after logout cannot expose a protected page from cache.
+      if (cleanPath !== '/login') {
+        window.history.replaceState(null, '', '/login');
+        setCurrentPath('/login');
+      }
+      return;
+    }
+
+    if (!currentBranch) {
+      const authorized = getAuthorizedBranches();
+      if (authorized.length === 1) {
+        switchBranch(authorized[0].id);
+        return;
+      }
+      if (cleanPath !== '/select-branch') {
+        window.history.replaceState(null, '', '/select-branch');
+        setCurrentPath('/select-branch');
+      }
+      return;
+    }
+
+    if (cleanPath === '/login' || cleanPath === '/select-branch' || cleanPath === '/') {
+      navigatePath('/dashboard', true);
+      return;
+    }
+
+    if (!parseProtectedRoute(cleanPath)) {
+      navigatePath('/dashboard', true);
+    }
+  }, [isAuthLoading, currentManager, currentBranch, currentPath, getAuthorizedBranches, switchBranch]);
+
+  const resolvedRoute = useMemo(() => {
+    return parseProtectedRoute(currentPath) ?? { tab: 'dashboard', visitId: null };
+  }, [currentPath]);
+
+  const activeTab = resolvedRoute.tab;
+  const selectedVisitId = resolvedRoute.visitId;
+
+  // Splash screen while verifying session so Login/Branch Selection never flash
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-bode-ivory flex flex-col items-center justify-center p-6">
+        <div className="bg-bode-forest p-2.5 rounded-2xl shadow-md mb-5">
+          <Logo variant="full" size="md" />
+        </div>
+        <div className="w-6 h-6 border-2 border-bode-forest/20 border-t-bode-forest rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Step 1: Login Screen (all other routes protected)
   if (!currentManager) {
     return <LoginScreen />;
   }
 
   // Step 2: Dedicated Branch Selection Screen after login
-  if (!branchConfirmed) {
-    return <BranchSelectionScreen onBranchSelected={() => setBranchConfirmed(true)} />;
+  if (!currentBranch) {
+    return <BranchSelectionScreen onBranchSelected={() => navigatePath('/dashboard', true)} />;
   }
 
   const handleNavigate = (tab: string, visitId?: string) => {
-    setActiveTab(tab);
-    if (visitId) {
-      setSelectedVisitId(visitId);
-      // When navigating to appointments with a visitId, treat it as "auto-assign" flow
-      if (tab === 'appointments') {
-        setAutoAssignVisitId(visitId);
-      } else {
-        setAutoAssignVisitId(null);
-      }
+    if (tab === 'visit-detail' && visitId) {
+      setAutoAssignVisitId(null);
+      navigatePath(`/visit/${encodeURIComponent(visitId)}`);
+    } else if (tab === 'appointments' && visitId) {
+      setAutoAssignVisitId(visitId);
+      navigatePath(TAB_PATHS[tab] || '/appointments');
     } else {
       setAutoAssignVisitId(null);
+      navigatePath(TAB_PATHS[tab] || '/dashboard');
     }
     setIsMobileSidebarOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -209,12 +324,45 @@ export const AppContent: React.FC = () => {
           )}
 
           {activeTab === 'settings' && (
-            <ComingSoon
-              title="Settings"
-              description="Configure branch preferences, notification rules, and terminal settings."
-              icon={<Settings className="w-8 h-8" />}
-              phase="Phase 2"
-            />
+            <div className="space-y-6 max-w-2xl mx-auto">
+              <div className="bg-white rounded-2xl border border-bode-border shadow-sm p-5 sm:p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-bode-forest text-bode-gold flex items-center justify-center shrink-0">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="font-serif text-lg font-bold text-bode-forest truncate">
+                      {currentBranch.shortName}
+                    </h2>
+                    <p className="text-xs text-bode-muted truncate">{currentBranch.name}</p>
+                  </div>
+                </div>
+                <div className="pt-3 border-t border-bode-border/70 space-y-2.5 text-xs text-bode-charcoal">
+                  <p className="flex items-start gap-2">
+                    <MapPin className="w-4 h-4 text-bode-emerald shrink-0 mt-0.5" />
+                    <span>{currentBranch.address}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <Phone className="w-4 h-4 text-bode-emerald shrink-0" />
+                    <span>{currentBranch.phone}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-bode-emerald shrink-0" />
+                    <span>{currentBranch.email}</span>
+                  </p>
+                  <p className="text-bode-muted">
+                    <strong className="text-bode-forest">GSTIN:</strong> {currentBranch.gstin}
+                  </p>
+                </div>
+              </div>
+
+              <ComingSoon
+                title="Settings"
+                description="Configure branch preferences, notification rules, and terminal settings."
+                icon={<Settings className="w-8 h-8" />}
+                phase="Phase 2"
+              />
+            </div>
           )}
         </main>
       </div>

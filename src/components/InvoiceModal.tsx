@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { CustomerVisit } from '../types';
-import { BodeLogo } from './BodeLogo';
+import { Logo } from './Logo';
 import {
   X,
   Printer,
@@ -90,7 +90,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
           {/* Invoice Header */}
           <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-6 border-b border-bode-border">
             <div>
-              <BodeLogo variant="dark" size="lg" />
+              <Logo variant="full" size="sm" />
               <div className="mt-3 text-xs text-bode-muted space-y-0.5">
                 <p className="font-semibold text-bode-forest">{currentBranch?.name}</p>
                 <p>{currentBranch?.address}</p>

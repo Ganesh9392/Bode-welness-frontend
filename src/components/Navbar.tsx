@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BodeLogo } from './BodeLogo';
+import { Logo } from './Logo';
 import {
   Bell,
   LogOut,
@@ -25,6 +25,7 @@ const PAGE_TITLES: Record<string, string> = {
   enquiries: 'Enquiries',
   campaign: 'Campaign',
   'master-bo': 'Master Backoffice',
+  settings: 'Settings',
   invoices: 'Invoices',
   payments: 'Payments',
   staff: 'Staff Therapists',
@@ -80,7 +81,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Menu className="w-5 h-5" />
           </button>
-          <BodeLogo variant="light" size="sm" showSubtitle={true} />
+          <Logo variant="compact" tone="light" showSubtitle={true} />
         </div>
 
         {/* Center: Dynamic page title */}

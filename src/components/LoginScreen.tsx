@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BodeLogo } from './BodeLogo';
+import { Logo } from './Logo';
 import { Eye, EyeOff, Lock, User, AlertCircle, ArrowRight, ShieldCheck, Sparkles, Building2 } from 'lucide-react';
 import { MANAGERS } from '../data/mockData';
 
 export const LoginScreen: React.FC = () => {
-  const { login } = useApp();
+  const { login, authNotice, clearAuthNotice } = useApp();
   const [username, setUsername] = useState('priya.sharma');
   const [password, setPassword] = useState('password123');
   const [showPassword, setShowPassword] = useState(false);
@@ -17,6 +17,7 @@ export const LoginScreen: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    clearAuthNotice();
     setLoading(true);
 
     setTimeout(() => {
@@ -47,7 +48,7 @@ export const LoginScreen: React.FC = () => {
           {/* Header Banner */}
           <div className="bg-bode-forest px-5 sm:px-8 pt-7 pb-6 text-center relative">
             <div className="flex justify-center mb-3">
-              <BodeLogo variant="light" size="lg" />
+              <Logo variant="full" size="md" />
             </div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-bode-gold text-xs font-medium tracking-wide">
               <ShieldCheck className="w-3.5 h-3.5" />
@@ -57,6 +58,15 @@ export const LoginScreen: React.FC = () => {
 
           {/* Form */}
           <div className="p-5 sm:p-8">
+            {authNotice && !errorMessage && (
+              <div className="mb-6 p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium text-xs sm:text-sm">{authNotice}</p>
+                </div>
+              </div>
+            )}
+
             {errorMessage && (
               <div className="mb-6 p-3.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm flex items-start gap-2.5 animate-shake">
                 <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
